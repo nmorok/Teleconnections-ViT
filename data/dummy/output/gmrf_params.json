@@ -1,0 +1,15 @@
+{
+  "grid_size": 10,
+  "n_years": 28,
+  "n_bootstraps": 100,
+  "n_total_samples": 2800,
+  "spatial_kappa": 0.3,
+  "temporal_rho": 0.7,
+  "temporal_sigma": 1.0,
+  "mean_density": 50.0,
+  "spatial_correlation_range_cells": 3.3333333333333335,
+  "seed": 2026,
+  "n_recruit_years": 28,
+  "recruitment_correlation": 0.3,
+  "mean_recruit_density": 30.0
+}
