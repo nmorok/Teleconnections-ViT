@@ -98,7 +98,7 @@ def create_spatial_precision_matrix(grid_size = 10, kappa=1.0):
     return Q.tocsr()
 
 
-def create_temporal_precision_matrix(n_years = 28, rho=0.7, sigma=1.0):
+def create_temporal_precision_matrix(n_years = 30, rho=0.7, sigma=1.0):
     """
     Create precision matrix for AR(1) temporal process.
     
@@ -112,7 +112,7 @@ def create_temporal_precision_matrix(n_years = 28, rho=0.7, sigma=1.0):
         
     Args:
         n_years: int
-            Number of time points (e.g., 28 for spawners)
+            Number of time points (e.g., 30 for spawners)
             
         rho: float, default=0.7
             Temporal correlation coefficient between consecutive years
@@ -230,7 +230,7 @@ def sample_gmrf(Q, n_samples=1):
 
 def create_spatiotemporal_gmrf_data(
     grid_size=10,
-    n_years=28,
+    n_years=30,
     n_bootstraps=100,
     spatial_kappa=0.3,
     temporal_rho=0.7,
@@ -255,7 +255,7 @@ def create_spatiotemporal_gmrf_data(
         grid_size: int, default=10
             Size of spatial grid (10 means 10×10 = 100 cells)
             
-        n_years: int, default=28
+        n_years: int, default=30
             Number of years (time steps)
             
         n_bootstraps: int, default=100
@@ -396,8 +396,8 @@ def create_spatiotemporal_gmrf_data(
 
 def create_spawner_recruit_pairs(
     grid_size=10,
-    n_spawner_years=28,
-    n_recruit_years=28,
+    n_spawner_years=30,
+    n_recruit_years=30,
     n_bootstraps=100,
     spatial_kappa=0.3,
     temporal_rho=0.7,
@@ -411,9 +411,9 @@ def create_spawner_recruit_pairs(
         
     Args:
         grid_size: int, default=10
-        n_spawner_years: int, default=28
+        n_spawner_years: int, default=30
             Number of spawner years (e.g., 1988-2015)
-        n_recruit_years: int, default=28
+        n_recruit_years: int, default=30
             Number of recruitment years (e.g., 1993-2016)
         n_bootstraps: int, default=100
         spatial_kappa: float, default=0.3
@@ -675,8 +675,8 @@ def main():
     Main function to generate dummy GMRF data for crab recruitment modeling.
     
     This creates data matching your real SPDE pipeline output structure:
-    - Spawners: 28 years (1988-2015) × 100 bootstraps = 2800 samples
-    - Recruits: 28 years (1988-2015) × 100 bootstraps = 2800 samples
+    - Spawners: 30 years (1988-2017) × 100 bootstraps = 3000 samples
+    - Recruits: 30 years (1988-2015) × 100 bootstraps = 3000 samples
     - Both on 10×10 grid (20km resolution)
     """
     
@@ -693,9 +693,9 @@ def main():
         'grid_size': 10,              # 10×10 = 100 cells per field
         
         # Temporal extent
-        'n_spawner_years': 28,        # 1988-2015
-        'n_recruit_years': 28,        # 1988-2015
-        
+        'n_spawner_years': 30,        # 1988-2017
+        'n_recruit_years': 30,        # 1988-2017
+
         # Bootstrap uncertainty
         'n_bootstraps': 100,          # Match your SPDE bootstrap count
         
