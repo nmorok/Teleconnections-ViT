@@ -345,7 +345,6 @@ weight_decay = 1e-5 [PLACEHOLDER]
 - **Why needed**: One-line loading in training scripts
 
 ---
-[Cole's reading stopped here so far]
 
 ### Phase 2: Model Development (Week 1-2)
 
@@ -369,6 +368,9 @@ weight_decay = 1e-5 [PLACEHOLDER]
 - **Type**: Learnable parameters (not sinusoidal)
 - **Shape**: [100, 128]
 - **Why learnable**: Grid has irregular survey boundaries; learned positions adapt to domain shape
+
+** QUESTION ** 
+The grid is going to be masked so that there are nans outside of the survey area. Do I still need to have the positional encodings be learned and not sinusoidal?
 
 ##### `TransformerEncoderLayer`
 - **Purpose**: Single transformer block (attention + MLP)
@@ -418,7 +420,7 @@ weight_decay = 1e-5 [PLACEHOLDER]
   - Loads spawner/recruit pairs
   - Optional: bootstrap uncertainty weights
   - Optional: data augmentation (flips/rotations)
-  - Normalizes to [0, 1] range
+  - Normalizes to [0, 1] range -- Do we need to do this? might not work great with the ranges of the data. 
 - **Methods**:
   - `__len__()`: Return dataset size
   - `__getitem__(idx)`: Return (spawner, recruit, uncertainty) tuple
@@ -880,13 +882,13 @@ python src/visualization/create_latex_tables.py
 
 ---
 
-## ✅ Completion Checklist
+## Completion Checklist
 
 ### Data Pipeline
-- [ ] GMRF dummy data (10×10) generates correctly
-- [ ] GMRF dummy data (50×50) generates correctly
+- [ ] GMRF dummy data (10×10) generates correctly -- check
+- [ ] GMRF dummy data (50×50) generates correctly -- check
 - [ ] Data verification passes all checks
-- [ ] Train/val/test splits created
+- [ ] Train/val/test splits created -- check
 - [ ] (Later) R data extraction completes
 - [ ] (Later) SPDE bootstrap completes (2-5 days)
 - [ ] (Later) Real data loads successfully
@@ -1036,7 +1038,7 @@ python src/visualization/create_latex_tables.py
 
 ---
 
-## 📚 References
+## References
 
 ### Papers
 - Vaswani et al. (2017) - Attention Is All You Need
@@ -1044,35 +1046,7 @@ python src/visualization/create_latex_tables.py
 - Thorson et al. (2015) - Geostatistical delta-GLMM (VAST package)
 - Lindgren et al. (2011) - SPDE approach for spatial modeling
 
-### Code Resources
-- PyTorch documentation: https://pytorch.org/docs/
-- INLA documentation: https://www.r-inla.org/
-- fmesher package: https://inlabru-org.github.io/fmesher/
-- Vision Transformer tutorial: https://github.com/lucidrains/vit-pytorch
 
-### Related Work
-- Your existing EOF-GLLVM pipeline (in project files)
-- VAST package for marine species distribution modeling
-- Transformer applications to spatiotemporal data
-
----
-
-## 🤝 Contributing
-
-This is thesis research code. For questions or collaborations, contact Cole.
-
-**Code style**:
-- Follow PEP 8 for Python
-- Use type hints where helpful
-- Comment complex logic
-- Keep functions focused (single responsibility)
-- Write docstrings for all functions
-
-**Git workflow**:
-- Main branch: stable, working code
-- Dev branch: active development
-- Feature branches: specific additions
-- Commit often with clear messages
 
 ---
 
@@ -1084,6 +1058,6 @@ Academic research code. Please cite if you use this work.
 
 **Last updated**: 2026-01-08
 
-**Status**: Development phase - dummy data pipeline complete, transformer implementation in progress
+**Status**: Development phase - dummy data pipeline complete, data validation in progress
 
-**Next steps**: Build transformer model, test on 10×10 dummy data, then scale to 50×50
+**Next steps**: Finish data validation, Build transformer model, test on 10×10 dummy data, then scale to 50×50

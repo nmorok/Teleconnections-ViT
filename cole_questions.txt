@@ -1,0 +1,79 @@
+A list of questions for me to keep track of and learn.
+
+
+Q. Why do we sample the GMRF in the generate_dummy_data.py file?
+A. To create different bootstraps or values of the static Q matrix. Get the sample by solving the matrix multiplication of a N(0,1). 
+This is like take a N(0,1) but encoding spatial correlation. 
+
+
+Q. What does the AdamW optimizer do?
+A.
+
+Q. What does Learning rate mean?
+A.
+
+Q. What does Weight decay mean?
+A. 
+
+Q. What does scheduler mean?
+A.
+
+Q. What does Gradient clipping mean?
+A. 
+
+Q. Explain the transformer encoder: What does the number of layers do? or attention heads? Or MLP hidden dim? or Dropout? or Layer norm?
+A. 
+
+Q. Explain the Positional Encoding: what are the types?
+A.
+
+Q. Explain the Decoder: What is all of it?
+A. 
+
+Q. What are the training hyperparameters for?
+A. 
+
+Q. How does the early stopping work?
+A. 
+
+Q. How do you decide how many heads to use in the self-attention block
+A. 
+
+Q. How to decide how many layers to include in the encoder. 
+A. 
+
+Q. Do we need to normalize the data for the model? IN the PyTorch dataset interface
+A. 
+
+Q. What does the train shuffle on mean? 
+A. 
+
+Q. How do the loss functions work in concert, like the spatial and the mse, etc. 
+A.
+
+Q. Do I need to interpolate missing data in transformer model, or can it handle missing data? it would be missing for some years only and might not be missing for both the rec and spawners at the same time
+A.
+
+Q. software engineering quesiton: what does __init__ mean? 
+A.
+
+Q. software engineering question: explian self. in python. What is it doing?
+A.
+
+Q. What does d_model mean?
+A. 
+
+Q. What does Linear() do?
+A. Performs operation called "affine". WHen you first call Linear(), it initializes the matrix with random numbers. During training, the model uses backpropagation to adjust these numbers so it can better predict the target output.
+
+Q. Why are learned positional embeddings better for images?
+A.
+
+Q. When is the positional embeddings used?
+A. 
+
+Q. I don't understand the feed forward mechanism.
+A. 
+
+Q. I don't understand layer norm or batch norm. 
+A. 
