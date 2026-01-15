@@ -210,3 +210,4 @@ __marimo__/
 
 # Cole specific ignores
 cole_questions.txt
+cole*
