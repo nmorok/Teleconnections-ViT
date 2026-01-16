@@ -26,6 +26,10 @@ class PatchEmbedding(nn.Module):
         self.num_patches = (grid_size // patch_size) ** 2
         self.projection = nn.Linear(patch_size * patch_size * in_channels, embed_dim)
 
+        # trying to fix weight initialization issues
+        nn.init.xavier_uniform_(self.projection.weight)
+        nn.init.zeros_(self.projection.bias)
+
     def forward(self, x):
         # x: (batch_size, channels, height, width) = [B, 2, 50, 50]
         batch_size = x.shape[0]
@@ -56,7 +60,7 @@ class PositionalEncoding2D(nn.Module):
     def __init__(self, n_patches = 100, embedding_dim=128):
         super().__init__()
         #Learnable position embeddings
-        self.position_embeddings = nn.Parameter(torch.randn(1, n_patches, embedding_dim))
+        self.position_embeddings = nn.Parameter(torch.randn(1, n_patches, embedding_dim) * 0.02) # initialize small random values
 
     def forward(self, x):
         # x: [batch, n_patches, embedding_dim]
@@ -101,7 +105,20 @@ class MultiHeadAttention(nn.Module):
 
         self.dropout = nn.Dropout(dropout) # nn.Dropout(p) randomly zeros out elements with probability p during training to prevent over fitting, to force model to not rely on any single connection. 
 
-    def forward(self, x, mask=None):
+        # trying to fix weight initialization issues
+        nn.init.xavier_uniform_(self.W_q.weight)
+        nn.init.xavier_uniform_(self.W_k.weight)
+        nn.init.xavier_uniform_(self.W_v.weight)
+        nn.init.xavier_uniform_(self.W_o.weight)
+        nn.init.zeros_(self.W_q.bias)
+        nn.init.zeros_(self.W_k.bias)
+        nn.init.zeros_(self.W_v.bias)
+        nn.init.zeros_(self.W_o.bias)
+
+
+
+
+    def forward(self, x, mask=None, return_attention=False):
         """
         Forward pass for multi-head attention.
     
@@ -168,6 +185,8 @@ class MultiHeadAttention(nn.Module):
         # Apply output projection
         output = self.W_o(output)  # [batch, patches, d_model]
 
+        if return_attention:
+            return output, attention_weights
         return output
     
 
@@ -201,6 +220,13 @@ class FeedForward(nn.Module):
 
         # Activation function (GELU is standard for transformers)
         self.activation = nn.GELU()
+
+        # trying to fix weight initialization issues
+        # ✓ FIXED: Initialize weights
+        nn.init.xavier_uniform_(self.linear1.weight)
+        nn.init.xavier_uniform_(self.linear2.weight)
+        nn.init.zeros_(self.linear1.bias)
+        nn.init.zeros_(self.linear2.bias)
 
     def forward(self, x):
         """
@@ -253,28 +279,36 @@ class TransformerBlock(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
 
-    def forward(self, x, mask=None):
+    def forward(self, x, mask=None, return_attention=False):
         """
         Forward pass through transformer block.
     
         Args:
             x: Input tensor [batch_size, num_patches, d_model]
             mask: Optional attention mask
+            return_attention: Whether to return attention weights
     
         Returns:
-            Output tensor [batch_size, num_patches, d_model]
+            If return_attention=False: Output tensor
+            If return_attention=True: (Output tensor, attention weights)
         """
 
         # attention block with skip connection (Pre-LN)
         # apply attention to normalized input, then add back original input
-        attn_output = self.attention(self.norm1(x), mask)
+        normed = self.norm1(x)
+        if return_attention:
+            attn_output, attn_weights = self.attention(normed, mask, return_attention=True)
+        else:
+            attn_output = self.attention(normed, mask)
+        
         x = x + attn_output
 
         # Feed-forward block with skip connection (Pre-LN)
-        # Apply feedforward to normalized input, then add back previous output
         ff_output = self.feedforward(self.norm2(x))
         x = x + ff_output
 
+        if return_attention:
+            return x, attn_weights
         return x
     
 
@@ -312,6 +346,16 @@ class SpatialDecoder(nn.Module):
         
         # Final output layer
         self.conv_out = nn.Conv2d(16, 1, kernel_size=3, padding=1)
+
+        # Initialize weights
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.BatchNorm2d):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
     
     def forward(self, x):
         # x: [B, embed_dim, 10, 10]

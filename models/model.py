@@ -53,6 +53,8 @@ class CrabTransformer(nn.Module):
         ])
         self.decoder = components.SpatialDecoder(self.embed_dim, self.patch_grid_size)
 
+        self._init_weights()
+
 
     def forward(self, x, return_attention=False):
         """
@@ -114,6 +116,47 @@ class CrabTransformer(nn.Module):
 
 
         pass 
+
+    def _init_weights(self):
+        """
+        Initialize weights using Xavier/Glorot initialization.
+        
+        This is CRITICAL for preventing gradient explosion in deep networks.
+        Without this, default PyTorch initialization can cause massive gradients.
+        """
+        print("Initializing model weights...")
+        
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier uniform initialization for linear layers
+                # This scales weights based on input/output dimensions
+                nn.init.xavier_uniform_(module.weight, gain=1.0)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+                    
+            elif isinstance(module, nn.Conv2d):
+                # Kaiming initialization for convolutional layers
+                # This is better for ReLU activations
+                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+                    
+            elif isinstance(module, nn.ConvTranspose2d):
+                # Xavier for transposed convolutions (used in decoder)
+                nn.init.xavier_uniform_(module.weight, gain=1.0)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+                    
+            elif isinstance(module, (nn.LayerNorm, nn.BatchNorm2d)):
+                # Standard initialization for normalization layers
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
+                
+            elif isinstance(module, nn.Embedding):
+                # Normal initialization for embeddings
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        
+        print("✓ Weight initialization complete")
 
 
 
