@@ -8,11 +8,22 @@ class CrabDataset(Dataset):
     Input (x): [S_t, R_{t-1}]
     Target (y): [R_t]
     """
-    def __init__(self, spawner_path, recruit_path, n_years=30):
+    def __init__(self, spawner_path, recruit_path, n_years=30, normalize=True):
         # Load the data from paths
         self.spawners = np.load(spawner_path).astype(np.float32)
         self.recruits = np.load(recruit_path).astype(np.float32)
         self.n_years = n_years
+        self.normalize = normalize
+
+        if self.normalize:
+            # Normalize each sample individually to [0, 1]
+            self.spawn_mean = self.spawners[self.spawners > 0].mean()
+            self.spawn_std = self.spawners[self.spawners > 0].std()
+            self.recruit_mean = self.recruits[self.recruits > 0].mean()
+            self.recruit_std = self.recruits[self.recruits > 0].std()
+            
+            print(f"Spawner norm: mean={self.spawn_mean:.4f}, std={self.spawn_std:.4f}")
+            print(f"Recruit norm: mean={self.recruit_mean:.4f}, std={self.recruit_std:.4f}")
         
         # Identify indices where a "previous year" exists within the same bootstrap.
         # We skip the first year (index 0, 30, 60...) of every bootstrap block.
@@ -36,6 +47,12 @@ class CrabDataset(Dataset):
         # Target: Current Recruits (R_t)
         target = self.recruits[real_idx]
         
+        # Normalize
+        if self.normalize:
+            s_t = (s_t - self.spawn_mean) / (self.spawn_std + 1e-8)
+            r_prev = (r_prev - self.recruit_mean) / (self.recruit_std + 1e-8)
+            target = (target - self.recruit_mean) / (self.recruit_std + 1e-8)
+            
         # Stack channels to create [2, H, W]
         x = np.stack([s_t, r_prev], axis=0)
         

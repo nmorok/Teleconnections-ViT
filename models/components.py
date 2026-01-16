@@ -278,37 +278,7 @@ class TransformerBlock(nn.Module):
         return x
     
 
-class SpatialDecoder(nn.Module):
-    """
-    Decoder to reconstruct grid from patch embeddings.
-    
-    Args:
-        grid_size: Size of input/output grid (default: 50)
-        patch_size: Size of each patch (default: 5)
-        in_channels: Number of input channels (default: 2)
-        embed_dim: Embedding dimension (default: 128)
-    """
-    def __init__(self, embed_dim=128, patch_grid_size=10):
-        super().__init__()
 
-        self.decoder = nn.Sequential( # sequential is like a pipeline, running things in order
-            # upsample from 10x10 to 25x25
-            nn.ConvTranspose2d(embed_dim, 64, kernel_size=4, stride=2, padding=1), # [B, 128, 10, 10] -> [B, 64, 20, 20]  kernel size is like the filter. stride means to increase the size by that amount.
-            nn.GELU(),
-            nn.BatchNorm2d(64), # normalize across batch for stability -- for images normally.
-
-            # upsample from 25x25 to 50x50
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
-            nn.GELU(),
-            nn.BatchNorm2d(32),
-
-            # Stage 3: 40×40 → 50×50 (use Upsample for exact size)
-            nn.Upsample(size=50, mode='bilinear', align_corners=False),
-            nn.Conv2d(32, 16, kernel_size=3, padding=1),
-            nn.GELU(),
-
-            nn.Conv2d(16, 1, kernel_size=3, padding=1) # final output layer [B, 32, 50, 50] -> [B, 1, 50, 50]
-        )
 
 class SpatialDecoder(nn.Module):
     """
@@ -323,36 +293,45 @@ class SpatialDecoder(nn.Module):
     def __init__(self, embed_dim=128, patch_grid_size=10):
         super().__init__()
 
-        self.conv1 = nn.ConvTranspose2d(embed_dim, 64, kernel_size=4, stride=2, padding=1) # [B, 128, 10, 10] -> [B, 64, 20, 20]
-        self.Activation1 = nn.GELU()
+        # Stage 1: 10×10 → 20×20
+        self.upsample1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+        self.conv1 = nn.Conv2d(embed_dim, 64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(64)
+        self.act1 = nn.GELU()
         
-
-        self.conv2 = nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1) # [B, 64, 20, 20] -> [B, 32, 40, 40]
-        self.Activation2 = nn.GELU()
+        # Stage 2: 20×20 → 40×40
+        self.upsample2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+        self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(32)
-
-        self.upsample = nn.Upsample(size=50, mode='bilinear', align_corners=False) # [B, 32, 40, 40] -> [B, 32, 50, 50]
-        self.Activation3 = nn.GELU()
+        self.act2 = nn.GELU()
+        
+        # Stage 3: 40×40 → 50×50
+        self.upsample3 = nn.Upsample(size=50, mode='bilinear', align_corners=False)
         self.conv3 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
-
-        self.conv4 = nn.Conv2d(16, 1, kernel_size=3, padding=1) # final output layer [B, 16, 50, 50] -> [B, 1, 50, 50]
+        self.act3 = nn.GELU()
+        
+        # Final output layer
+        self.conv_out = nn.Conv2d(16, 1, kernel_size=3, padding=1)
     
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.Activation1(x)
+        # x: [B, embed_dim, 10, 10]
+        
+        x = self.upsample1(x)  # [B, 128, 20, 20]
+        x = self.conv1(x)       # [B, 64, 20, 20]
         x = self.bn1(x)
-
-        x = self.conv2(x)
-        x = self.Activation2(x)
+        x = self.act1(x)
+        
+        x = self.upsample2(x)  # [B, 64, 40, 40]
+        x = self.conv2(x)       # [B, 32, 40, 40]
         x = self.bn2(x)
-
-        x = self.upsample(x)
-        x = self.Activation3(x)
-        x = self.conv3(x)
-
-        x = self.conv4(x)
-
+        x = self.act2(x)
+        
+        x = self.upsample3(x)  # [B, 32, 50, 50]
+        x = self.conv3(x)       # [B, 16, 50, 50]
+        x = self.act3(x)
+        
+        x = self.conv_out(x)   # [B, 1, 50, 50]
+        
         return x
 
         '''
