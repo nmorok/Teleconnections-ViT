@@ -27,12 +27,12 @@ def create_temporal_splits(data_type = 'dummy', n_years = 30, train_years = 22, 
 
     elif data_type == "dummy":
         data_dir = Path("data/dummy/output")
-        spawners = np.load(data_dir / "gmrf_spawners_10x10.npy")
-        recruits = np.load(data_dir / "gmrf_recruits_10x10.npy")
+        spawners = np.load(data_dir / "gmrf_spawners_50x50.npy")
+        recruits = np.load(data_dir / "gmrf_recruits_50x50.npy")
 
     n_samples = len(spawners)
 
-    n_years = n_samples // n_bootstraps"
+    n_years = n_samples // n_bootstraps
 
     print(f"Total samples: {n_samples}")
     print(f"Years: {n_years}, Bootstraps: {n_bootstraps}")

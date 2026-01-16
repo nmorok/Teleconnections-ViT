@@ -19,7 +19,7 @@ class PatchEmbedding(nn.Module):
     results in 100 patches of size 5 x 5, each flattened to a vector of size 25.
 
     """
-    def __init__(self, grid_size=50, patch_size=5, in_channels=1, embed_dim=128):
+    def __init__(self, grid_size=50, patch_size=5, in_channels=2, embed_dim=128):
         super().__init__()
         self.grid_size = grid_size
         self.patch_size = patch_size
@@ -272,3 +272,105 @@ class TransformerBlock(nn.Module):
         x = x + ff_output
 
         return x
+    
+
+class SpatialDecoder(nn.Module):
+    """
+    Decoder to reconstruct grid from patch embeddings.
+    
+    Args:
+        grid_size: Size of input/output grid (default: 50)
+        patch_size: Size of each patch (default: 5)
+        in_channels: Number of input channels (default: 2)
+        embed_dim: Embedding dimension (default: 128)
+    """
+    def __init__(self, embed_dim=128, patch_grid_size=10):
+        super().__init__()
+
+        self.decoder = nn.Sequential( # sequential is like a pipeline, running things in order
+            # upsample from 10x10 to 25x25
+            nn.ConvTranspose2d(embed_dim, 64, kernel_size=4, stride=2, padding=1), # [B, 128, 10, 10] -> [B, 64, 20, 20]  kernel size is like the filter. stride means to increase the size by that amount.
+            nn.GELU(),
+            nn.BatchNorm2d(64), # normalize across batch for stability -- for images normally.
+
+            # upsample from 25x25 to 50x50
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.GELU(),
+            nn.BatchNorm2d(32),
+
+            # Stage 3: 40×40 → 50×50 (use Upsample for exact size)
+            nn.Upsample(size=50, mode='bilinear', align_corners=False),
+            nn.Conv2d(32, 16, kernel_size=3, padding=1),
+            nn.GELU(),
+
+            nn.Conv2d(16, 1, kernel_size=3, padding=1) # final output layer [B, 32, 50, 50] -> [B, 1, 50, 50]
+        )
+
+class SpatialDecoder(nn.Module):
+    """
+    Decoder to reconstruct grid from patch embeddings.
+    
+    Args:
+        grid_size: Size of input/output grid (default: 50)
+        patch_size: Size of each patch (default: 5)
+        in_channels: Number of input channels (default: 2)
+        embed_dim: Embedding dimension (default: 128)
+    """
+    def __init__(self, embed_dim=128, patch_grid_size=10):
+        super().__init__()
+
+        self.conv1 = nn.ConvTranspose2d(embed_dim, 64, kernel_size=4, stride=2, padding=1) # [B, 128, 10, 10] -> [B, 64, 20, 20]
+        self.Activation1 = nn.GELU()
+        self.bn1 = nn.BatchNorm2d(64)
+        
+
+        self.conv2 = nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1) # [B, 64, 20, 20] -> [B, 32, 40, 40]
+        self.Activation2 = nn.GELU()
+        self.bn2 = nn.BatchNorm2d(32)
+
+        self.upsample = nn.Upsample(size=50, mode='bilinear', align_corners=False) # [B, 32, 40, 40] -> [B, 32, 50, 50]
+        self.Activation3 = nn.GELU()
+        self.conv3 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
+
+        self.conv4 = nn.Conv2d(16, 1, kernel_size=3, padding=1) # final output layer [B, 16, 50, 50] -> [B, 1, 50, 50]
+    
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.Activation1(x)
+        x = self.bn1(x)
+
+        x = self.conv2(x)
+        x = self.Activation2(x)
+        x = self.bn2(x)
+
+        x = self.upsample(x)
+        x = self.Activation3(x)
+        x = self.conv3(x)
+
+        x = self.conv4(x)
+
+        return x
+
+        '''
+        This essentially the same thing. except the below goes in the __init__ function as a single block.
+        Doing the above to learn and see each step more clearly.
+        self.decoder = nn.Sequential( # sequential is like a pipeline, running things in order
+            # upsample from 10x10 to 25x25
+            nn.ConvTranspose2d(embed_dim, 64, kernel_size=4, stride=2, padding=1), # [B, 128, 10, 10] -> [B, 64, 20, 20]  kernel size is like the filter. stride means to increase the size by that amount.
+            nn.GELU(),
+            nn.BatchNorm2d(64), # normalize across batch for stability -- for images normally.
+
+            # upsample from 25x25 to 50x50
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.GELU(),
+            nn.BatchNorm2d(32),
+
+            # Stage 3: 40×40 → 50×50 (use Upsample for exact size)
+            nn.Upsample(size=50, mode='bilinear', align_corners=False),
+            nn.Conv2d(32, 16, kernel_size=3, padding=1),
+            nn.GELU(),
+
+            nn.Conv2d(16, 1, kernel_size=3, padding=1) # final output layer [B, 32, 50, 50] -> [B, 1, 50, 50]
+        )'''
+  
+

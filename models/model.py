@@ -10,9 +10,25 @@ import components
 
 class CrabTransformer(nn.Module):
     """
-    Docstring for CrabTransformer
-    """
-    def __init__(self, grid_size=50, patch_size=5, in_channels=1, embed_dim=128, num_heads=8, num_layers=6, d_ff=512, mask=None, dropout=0.1):
+    Vision Transformer for predicting crab recruitment from spawner spatial data.
+    
+    Takes a 50x50 grid of spawner data and predicts a 50x50 grid of recruitment data.
+    Uses patch-based attention to capture spatial relationships.
+    
+    Args:
+        grid_size: Size of input/output grid (default: 50)
+        patch_size: Size of each patch (default: 5)
+        in_channels: Number of input channels (default: 2)
+        embed_dim: Embedding dimension (default: 128)
+        num_heads: Number of attention heads (default: 8)
+        num_layers: Number of transformer blocks (default: 6)
+        d_ff: Feed-forward hidden dimension (default: 512)
+        dropout: Dropout probability (default: 0.1)
+        output_type: Type of output - 'grid' or 'scalar' (default: 'grid')
+
+
+        """
+    def __init__(self, grid_size=50, patch_size=5, in_channels=2, embed_dim=128, num_heads=8, num_layers=6, d_ff=512, mask=None, dropout=0.1):
         super().__init__()
 
         # initialize all of the variables
@@ -26,21 +42,30 @@ class CrabTransformer(nn.Module):
         self.mask = mask
         self.dropout = dropout
         self.n_patches = (grid_size // patch_size) ** 2
+        self.patch_grid_size = grid_size // patch_size  # e.g., 50/5=10
 
         self.patch_embed = components.PatchEmbedding(self.grid_size, self.patch_size, self.in_channels, self.embed_dim)
         self.position_encode = components.PositionalEncoding2D(self.n_patches, self.embed_dim)
 
-        self.transformer_block = components.TransformerBlock(self.embed_dim, self.num_heads, self.d_ff, self.dropout)
+        self.transformer_blocks = nn.ModuleList([
+            components.TransformerBlock(self.embed_dim, self.num_heads, self.d_ff, self.dropout)
+            for _ in range(self.num_layers)
+        ])
+        self.decoder = components.SpatialDecoder(self.embed_dim, self.patch_grid_size)
 
-        #self.decoder
 
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
         """
         Docstring for forward
         
         :param self: Description
         :param x: Description
         """
+        # getting the batch size
+        batch_size = x.shape[0]
+
+        if return_attention:
+            attention_maps = []
 
         # Convert grid to patch embeddings
         x = self.patch_embed(x)  # [batch_size, num_patches, embed_dim]
@@ -49,35 +74,26 @@ class CrabTransformer(nn.Module):
         x = self.position_encode(x)  # [batch_size, num_patches, embed_dim]
 
         # Pass through transformer layers
-        for _ in range(self.num_layers):
-            x = self.transformer_block(x, self.mask)  # [batch_size, num_patches, embed_dim]
+        for block in self.transformer_blocks:
+            
+            if return_attention:
+                x, attn = block(x, self.mask, return_attention=True)  # [batch_size, num_patches, embed_dim], [batch_size, heads, patches, patches]
+                attention_maps.append(attn)
+            else:
+                x = block(x, self.mask)  # [batch_size, num_patches, embed_dim]
 
-        #x = self.decoder(x)  # [batch_size, num_patches, embed_dim]
+        # Decode to output patches
+        # need to reshape first. from [batch_size, num_patches, embed_dim] to [batch_size, embed_dim, num_patches, num_patches]
+        x = x.transpose(1, 2)
+        x = x.view(batch_size, self.embed_dim, self.patch_grid_size, self.patch_grid_size)
+        x = self.decoder(x)  # [batch, channels, n_patches, n_patches]
 
-        return x  # [batch_size, num_patches, embed_dim]
+
+        if return_attention:
+            return x, attention_maps  # [batch_size, 1, grid_size, grid_size], List of attention maps
+        else:
+            return x  # [batch_size, num_patches, embed_dim]
     
-    def get_attention_maps(self, x):
-        """
-        Docstring for get_attention_maps
-        
-        :param self: Description
-        :param x: Description
-        """
-
-        attention_maps = []
-
-        # Convert grid to patch embeddings
-        x = self.patch_embed(x)  # [batch_size, num_patches, embed_dim]
-
-        # Add positional encoding
-        x = self.position_encode(x)  # [batch_size, num_patches, embed_dim]
-
-        # Pass through transformer layers and collect attention maps
-        for layer in self.transformer_block.layers:
-            x, attn_map = layer.get_attention_map(x, self.mask)  # [batch_size, num_patches, embed_dim], [batch_size, heads, patches, patches]
-            attention_maps.append(attn_map)
-
-        return attention_maps  # List of attention maps from each layer
     
     def visualize_attention(self, attention_maps, patch_indices):
         """
@@ -97,7 +113,8 @@ class CrabTransformer(nn.Module):
                     
 
 
-        return 
+        pass 
+
 
 
 

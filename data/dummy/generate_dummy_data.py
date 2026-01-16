@@ -10,7 +10,7 @@ from pathlib import Path
 import json
 from tqdm import tqdm
 
-def create_spatial_precision_matrix(grid_size = 10, kappa=1.0):
+def create_spatial_precision_matrix(grid_size = 50, kappa=1.0):
     """
     Create precision matrix for 2D spatial grid with 4-neighbor structure.
     
@@ -395,7 +395,7 @@ def create_spatiotemporal_gmrf_data(
 
 
 def create_spawner_recruit_pairs(
-    grid_size=10,
+    grid_size=50,
     n_spawner_years=30,
     n_recruit_years=30,
     n_bootstraps=100,
@@ -690,7 +690,7 @@ def main():
     
     config = {
         # Spatial grid
-        'grid_size': 10,              # 10×10 = 100 cells per field
+        'grid_size': 50,              # 50×50 = 2500 cells per field
         
         # Temporal extent
         'n_spawner_years': 30,        # 1988-2017
@@ -738,12 +738,12 @@ def main():
     print("="*80)
     
     # Save numpy arrays
-    np.save(output_dir / "gmrf_spawners_10x10.npy", spawners)
-    print(f"Saved: {output_dir / 'gmrf_spawners_10x10.npy'}")
+    np.save(output_dir / "gmrf_spawners_50x50.npy", spawners)
+    print(f"Saved: {output_dir / 'gmrf_spawners_50x50.npy'}")
     print(f"  Shape: {spawners.shape}")
     
-    np.save(output_dir / "gmrf_recruits_10x10.npy", recruits)
-    print(f"Saved: {output_dir / 'gmrf_recruits_10x10.npy'}")
+    np.save(output_dir / "gmrf_recruits_50x50.npy", recruits)
+    print(f"Saved: {output_dir / 'gmrf_recruits_50x50.npy'}")
     print(f"  Shape: {recruits.shape}")
     
     # Save metadata
