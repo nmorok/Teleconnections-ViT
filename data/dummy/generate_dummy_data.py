@@ -219,7 +219,8 @@ def sample_gmrf(Q, n_samples=1):
         # Step 2: Solve sparse linear system Q × x = z
         # This is the key step! It creates the correlation structure.
         # spsolve is efficient because Q is sparse (mostly zeros)
-        x = spsolve(Q, z)      
+        x = spsolve(Q, z)   
+        x = (x - x.mean()) / x.std()   
         samples.append(x)
     
     return np.array(samples)
