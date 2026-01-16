@@ -27,26 +27,30 @@ class PatchEmbedding(nn.Module):
         self.projection = nn.Linear(patch_size * patch_size * in_channels, embed_dim)
 
     def forward(self, x):
-        # x: (batch_size, channels, height, width) = [B, 1, 50, 50]
+        # x: (batch_size, channels, height, width) = [B, 2, 50, 50]
+        batch_size = x.shape[0]
 
-        batch__size = x.shape[0]
-
-        # Unfold into patches: [B, 1, 50, 50] -> [B, 100, 25]
-        patches = x.unfold(2, self.patch_size, self.patch_size) # unfold height
+        # Unfold into patches: [B, C, H, W] -> [B, C, n_patches_h, n_patches_w, patch_h, patch_w]
+        patches = x.unfold(2, self.patch_size, self.patch_size)  # unfold height
+        patches = patches.unfold(3, self.patch_size, self.patch_size)  # unfold width
         
-        patches = patches.unfold(3, self.patch_size, self.patch_size) # unfold width
+        # patches shape: [B, 2, 10, 10, 5, 5]
+        # Rearrange to: [B, n_patches_h, n_patches_w, C, patch_h, patch_w]
+        patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous()
         
-        patches = patches.contiguous().view(batch__size, -1, self.patch_size * self.patch_size) # flatten patches
+        # Flatten patches: [B, 10, 10, 2, 5, 5] -> [B, 100, 50]
+        patches = patches.view(batch_size, self.num_patches, -1)
         
-        # Project patches to embedding dimension: [B, 100, 25] -> [B, 100, 128]
+        # Project patches to embedding dimension: [B, 100, 50] -> [B, 100, 128]
         embeddings = self.projection(patches)
+
         return embeddings
 
 
 
 class PositionalEncoding2D(nn.Module):
     '''
-    Add leardned positional embeddings to patches. 
+    Add learned positional embeddings to patches. 
     Each of the 100 patches gets a unique position vector.
     '''
     def __init__(self, n_patches = 100, embedding_dim=128):
