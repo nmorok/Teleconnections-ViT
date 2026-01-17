@@ -334,18 +334,19 @@ class SpatialDecoder(nn.Module):
         self.act1 = nn.GELU()
         
         # Stage 2: 20×20 → 40×40
-        self.upsample2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(32)
-        self.act2 = nn.GELU()
+        #self.upsample2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+        #self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
+        #self.bn2 = nn.BatchNorm2d(32)
+        #self.act2 = nn.GELU()
         
         # Stage 3: 40×40 → 50×50
-        self.upsample3 = nn.Upsample(size=50, mode='bilinear', align_corners=False)
-        self.conv3 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
-        self.act3 = nn.GELU()
+        #self.upsample3 = nn.Upsample(size=50, mode='bilinear', align_corners=False)
+        #self.conv3 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
+        #self.act3 = nn.GELU()
         
         # Final output layer
-        self.conv_out = nn.Conv2d(16, 1, kernel_size=3, padding=1)
+        #self.conv_out = nn.Conv2d(16, 1, kernel_size=3, padding=1)
+        self.conv_out = nn.Conv2d(32, 1, kernel_size=3, padding=1)
 
         # Initialize weights
         for module in self.modules():
@@ -365,14 +366,14 @@ class SpatialDecoder(nn.Module):
         x = self.bn1(x)
         x = self.act1(x)
         
-        x = self.upsample2(x)  # [B, 64, 40, 40]
-        x = self.conv2(x)       # [B, 32, 40, 40]
-        x = self.bn2(x)
-        x = self.act2(x)
+        #x = self.upsample2(x)  # [B, 64, 40, 40]
+        #x = self.conv2(x)       # [B, 32, 40, 40]
+        #x = self.bn2(x)
+        #x = self.act2(x)
         
-        x = self.upsample3(x)  # [B, 32, 50, 50]
-        x = self.conv3(x)       # [B, 16, 50, 50]
-        x = self.act3(x)
+        #x = self.upsample3(x)  # [B, 32, 50, 50]
+        #x = self.conv3(x)       # [B, 16, 50, 50]
+        #x = self.act3(x)
         
         x = self.conv_out(x)   # [B, 1, 50, 50]
         
