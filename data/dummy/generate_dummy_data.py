@@ -533,6 +533,8 @@ def create_spawner_recruit_pairs(
         'recruitment_correlation': recruitment_correlation,
         'mean_recruit_density': mean_recruit_density
     }
+
+    print(spawners[:10])
     
     return spawners, recruits, params
 

@@ -19,7 +19,7 @@ class PatchEmbedding(nn.Module):
     results in 100 patches of size 5 x 5, each flattened to a vector of size 25.
 
     """
-    def __init__(self, grid_size=50, patch_size=5, in_channels=2, embed_dim=128):
+    def __init__(self, grid_size=50, patch_size=5, in_channels=1, embed_dim=128):
         super().__init__()
         self.grid_size = grid_size
         self.patch_size = patch_size
@@ -67,6 +67,79 @@ class PositionalEncoding2D(nn.Module):
         # add position embeddings (broadcast across batch)
         return x + self.position_embeddings 
     
+
+class TemporalEncoding(nn.Module):
+    """
+    Sinusoidal temporal encoding for year indices.
+    Fixed instead of learned for a first pass.
+
+    PE(t, 2i)   = sin(t / 10000^(2i/d_model))
+    PE(t, 2i+1) = cos(t / 10000^(2i/d_model))
+
+    Allows for prediction
+    """
+    def __init__(self, embed_dim=128, max_years=30, precompute_years=50):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.max_years = max_years
+        self.precompute_years = precompute_years
+        
+        # Pre-compute encodings for 0 to precompute_years-1
+        pe = torch.zeros(precompute_years, embed_dim)
+        position = torch.arange(0, precompute_years, dtype=torch.float).unsqueeze(1)
+        
+        div_term = torch.exp(
+            torch.arange(0, embed_dim, 2).float() * 
+            (-math.log(10000.0) / embed_dim)
+        )
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        self.register_buffer('pe', pe)
+        self.register_buffer('div_term', div_term)
+        
+        print(f"Sinusoidal temporal encoding initialized:")
+        print(f"  Pre-computed years: 0-{precompute_years-1}")
+        print(f"  Can dynamically compute beyond year {precompute_years} ✓")
+    
+    def _compute_encoding(self, year_indices):
+        """Compute encoding dynamically for arbitrary year indices."""
+        batch_size = year_indices.shape[0]
+        device = year_indices.device
+        
+        pe = torch.zeros(batch_size, self.embed_dim, device=device)
+        position = year_indices.float().unsqueeze(1)
+        
+        pe[:, 0::2] = torch.sin(position * self.div_term)
+        pe[:, 1::2] = torch.cos(position * self.div_term)
+        
+        return pe
+    
+    def forward(self, x, year_indices):
+        """
+        Args:
+            x: Patch embeddings [batch, num_patches, embed_dim]
+            year_indices: Year indices [batch] - any values
+        
+        Returns:
+            x with temporal embeddings added [batch, num_patches, embed_dim]
+        """
+        # Check if all indices are in pre-computed range
+        if torch.all(year_indices < self.precompute_years).item():
+            # Fast path: use pre-computed encodings
+            temporal_emb = self.pe[year_indices]
+        else:
+            # Slow path: compute dynamically
+            temporal_emb = self._compute_encoding(year_indices)
+        
+        # Expand and add
+        temporal_emb = temporal_emb.unsqueeze(1)
+        
+        return x + temporal_emb
+
+    
+
 
 class MultiHeadAttention(nn.Module):
     """
@@ -182,8 +255,8 @@ class MultiHeadAttention(nn.Module):
         # Combine heads: [batch, patches, heads, d_head] → [batch, patches, d_model]
         output = output.contiguous().view(batch_size, num_patches, self.d_model) # contiguous is for how the data is stored in memory and changes the order so you can use it.
 
-        # Apply output projection
-        output = self.W_o(output)  # [batch, patches, d_model]
+        # Apply output projection -- this allows all of the heads to talk to each other. 
+        output = self.W_o(output)  # [batch, patches, d_model] 
 
         if return_attention:
             return output, attention_weights
@@ -328,8 +401,8 @@ class SpatialDecoder(nn.Module):
         super().__init__()
 
         # Stage 1: 10×10 → 20×20
-        self.upsample1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.conv1 = nn.Conv2d(embed_dim, 64, kernel_size=3, padding=1)
+        self.upsample1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False) # upsample takes increases the size
+        self.conv1 = nn.Conv2d(embed_dim, 64, kernel_size=3, padding=1) # convolution reduces the number of channels. we go from 128 to 64. 
         self.bn1 = nn.BatchNorm2d(64)
         self.act1 = nn.GELU()
         

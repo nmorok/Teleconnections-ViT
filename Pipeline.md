@@ -24,6 +24,7 @@ Can a Vision Transformer predict teleconnections, with a case study on the snow 
 
 ### Approach
 - **Input**: Spawner density fields ([PLACEHOLDER]×[PLACEHOLDER] km grid, eastern Bering Sea)
+  - Or dummy data built on a 50x50 grid.
 - **Output**: Recruitment density fields (same grid, 5 years later)
 - **Architecture**: Vision Transformer adapted for spatial regression
 - **Baseline**: Compare against EOF-GLLVM, traditional EOF+GAM, spectral clustering
@@ -49,11 +50,9 @@ Recruits:  [2800, [PLACEHOLDER], [PLACEHOLDER]]  = 30 years × 100 bootstraps ×
 
 ### Dummy Data Dimensions
 ```
-Spawners:  [3000, 10, 10] or [3000, 50, 50]
-Recruits:  [3000, 10, 10] or [3000, 50, 50]
+Spawners:  [3000, 50, 50]
+Recruits:  [3000, 50, 50]
 ```
-- **10×10**: Fast testing, prototype development
-- **50×50**: Production scale, final training
 
 ### Spatial Properties
 - **Grid resolution**: [PLACEHOLDER] km per cell
@@ -61,7 +60,7 @@ Recruits:  [3000, 10, 10] or [3000, 50, 50]
 - **CRS**: [PLACEHOLDER]
 - **Spatial correlation**: ~60 km range (κ = 0.3)
 
-### Temporal Properties
+### Temporal Properties of Dummy Data
 - **Temporal autocorrelation**: ρ = 0.7 (strong year-to-year persistence)
 - **Spawner-recruitment lag**: none, since dummy data
 - **Spawner-recruitment correlation**: r ≈ 0.3 (moderate relationship)
@@ -110,17 +109,17 @@ data/
 ### Architecture: Vision Transformer for Spatial Regression
 
 #### Input Processing
-- **Input shape**: `[batch, 1, [PLACEHOLDER], [PLACEHOLDER]]` (single-channel density map)
-- **Patch size**: [PLACEHOLDER]×[PLACEHOLDER] pixels
-- **Number of patches**: [PLACEHOLDER] ([PLACEHOLDER]×[PLACEHOLDER] grid of patches)
+- **Input shape**: `[batch, 2, [PLACEHOLDER], [PLACEHOLDER]]` (double-channel density map) ([B, 2, 50, 50] for the dummy data)
+- **Patch size**: [PLACEHOLDER]×[PLACEHOLDER] pixels (5 x 5 patch size in dummy data)
+- **Number of patches**: [PLACEHOLDER] ([PLACEHOLDER]×[PLACEHOLDER] grid of patches) 100 5 x 5 patches in the dummy data 
 - **Patch embedding**: Linear projection to 128-dim vectors
 
 #### Transformer Encoder
 - **Embedding dimension**: 128
-- **Number of layers**: [PLACEHOLDER]
-- **Attention heads**: [PLACEHOLDER] ([PLACEHOLDER] dim per head)
+- **Number of layers**: 6
+- **Attention heads**: 8 (128 dim per head)
 - **MLP hidden dim**: [PLACEHOLDER] (4× embedding dim)
-- **Dropout**: [PLACEHOLDER]
+- **Dropout**: 0.1
 - **Layer norm**: Pre-norm architecture
 
 #### Positional Encoding
@@ -130,7 +129,7 @@ data/
 
 #### Decoder
 - **Architecture**: Reshape → Conv transpose layers
-- **Output shape**: `[batch, 1, [PLACEHOLDER], [PLACEHOLDER]]`
+- **Output shape**: `[batch, 1, 50, 50]` for the dummy data
 - **Activation**: None (predicting densities directly)
 
 #### Model Size
@@ -139,14 +138,15 @@ data/
 - **Training memory**: ~[PLACEHOLDER] GB (batch_size=[PLACEHOLDER], grad checkpointing off)
 
 ### Loss Function
-**Weighted MSE with bootstrap uncertainty**:
+**Tweedie loss function**:
 ```
-Loss = Σ [w_i × (pred_i - target_i)²]
-where w_i = 1 / (uncertainty_i² + ε)
+term1 = -targets * (predictions ** (1 - p)) / (1 - p)
+term2 = (predictions ** (2 - p)) / (2 - p)
+
+loss = term1 + term2
 ```
 
-**NOTE: or do we use Tweedie to handle the inflated zeros?**
-
+Should I build a new loss function using uncertainty weighting?
 **Why weighted?**
 - High weight where bootstrap uncertainty is low (confident predictions)
 - Low weight where bootstrap uncertainty is high (noisy regions)
@@ -178,30 +178,25 @@ Test:       Years 25-28 (2021-2023)  →   400 samples (3 years × 100 bootstrap
 
 ### Training Hyperparameters
 ```python
-batch_size = 32 [PLACEHOLDER]
-max_epochs = 200 [PLACEHOLDER]
-early_stopping_patience = 20 [PLACEHOLDER]
+batch_size = 100 [PLACEHOLDER]
+max_epochs = 50 [PLACEHOLDER]
+early_stopping_patience = 10 [PLACEHOLDER]
 learning_rate = 1e-4 [PLACEHOLDER]
 weight_decay = 1e-5 [PLACEHOLDER]
 ```
 
 ### Compute Requirements
 
-#### 10×10 Grid (Prototyping)
-- **Training time**: ~5 minutes/epoch (CPU)
-- **Total training**: ~30 minutes (with early stopping)
-- **Memory**: < 1 GB
-- **Hardware**: Any laptop
 
 #### 50×50 Grid (Production)
-- **Training time**: ~2 hours/epoch (GPU) or ~8 hours/epoch (CPU)
-- **Total training**: ~40 hours (GPU) or ~160 hours (CPU)
-- **Memory**: ~4 GB GPU / ~8 GB RAM
+- **Training time**: ~2 minutes on Google Colab CPU
+- **Total training**: 
+- **Memory**: 
 - **Hardware**: Recommended GPU (CUDA 11.8+)
 
 ### Early Stopping
 - **Metric**: Validation loss
-- **Patience**: 20 epochs
+- **Patience**: 10 epochs
 - **Mode**: Minimize
 - **Action**: Stop training, restore best weights
 
