@@ -49,6 +49,8 @@ class CrabTransformer(nn.Module):
         self.position_encode = components.PositionalEncoding2D(self.n_patches, self.embed_dim)
         self.temporal_encode = components.TemporalEncoding(self.embed_dim, max_years=30, precompute_years=50)
 
+        self.embedding_dropout = nn.Dropout(self.dropout)
+
         self.transformer_blocks = nn.ModuleList([
             components.TransformerBlock(self.embed_dim, self.num_heads, self.d_ff, self.dropout)
             for _ in range(self.num_layers)
@@ -86,6 +88,9 @@ class CrabTransformer(nn.Module):
 
         # Add temporal encoding
         x = self.temporal_encode(x, year_indices)  # [batch_size, num_patches, embed_dim] [B, 100, 128]
+
+        # Apply dropout
+        x = self.embedding_dropout(x)  # [batch_size, num_patches, embed
 
         # Pass through transformer layers
         for block in self.transformer_blocks:
