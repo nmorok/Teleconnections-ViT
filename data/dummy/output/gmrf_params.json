@@ -4,12 +4,12 @@
   "n_bootstraps": 100,
   "n_total_samples": 3000,
   "spatial_kappa": 0.3,
-  "temporal_rho": 0.7,
+  "temporal_rho": 0,
   "temporal_sigma": 1.0,
   "mean_density": 50.0,
   "spatial_correlation_range_cells": 3.3333333333333335,
   "seed": 2026,
   "n_recruit_years": 30,
-  "recruitment_correlation": 0.3,
+  "recruitment_correlation": 0.9,
   "mean_recruit_density": 30.0
 }
