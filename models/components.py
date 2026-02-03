@@ -402,23 +402,27 @@ class SpatialDecoder(nn.Module):
 
         # Stage 1: 10×10 → 20×20
         self.upsample1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False) # upsample takes increases the size
-        self.conv1 = nn.Conv2d(embed_dim, 64, kernel_size=3, padding=1) # convolution reduces the number of channels. we go from 128 to 64. 
+        #self.conv1 = nn.Conv2d(embed_dim, 64, kernel_size=3, padding=1) # convolution reduces the number of channels. we go from 128 to 64. 
+        self.conv1 = nn.Conv2d(embed_dim, 64, kernel_size=3, padding=1, padding_mode='reflect') # can try this if need be.
         self.bn1 = nn.BatchNorm2d(64)
         self.act1 = nn.GELU()
         
         # Stage 2: 20×20 → 40×40
         self.upsample2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
+        #self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1, padding_mode='reflect')
         self.bn2 = nn.BatchNorm2d(32)
         self.act2 = nn.GELU()
         
         # Stage 3: 40×40 → 50×50
         self.upsample3 = nn.Upsample(size=50, mode='bilinear', align_corners=False)
-        self.conv3 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
+        #self.conv3 = nn.Conv2d(32, 16, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(32, 16, kernel_size=3, padding=1, padding_mode='reflect')
         self.act3 = nn.GELU()
         
         # Final output layer
-        self.conv_out = nn.Conv2d(16, 1, kernel_size=3, padding=1)
+        #self.conv_out = nn.Conv2d(16, 1, kernel_size=3, padding=1)
+        self.conv_out = nn.Conv2d(16, 1, kernel_size=3, padding=1, padding_mode='reflect')
         
 
         # Initialize weights
