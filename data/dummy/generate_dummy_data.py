@@ -706,10 +706,10 @@ def main():
         'spatial_kappa': 0.3,         # ~60km correlation range at 20km resolution
         
         # Temporal correlation  
-        'temporal_rho': 0,          # Strong year-to-year persistence
+        'temporal_rho': 0.3,          # Strong year-to-year persistence
         
         # Spawner-recruitment relationship
-        'recruitment_correlation': 0.9,  # Weak-moderate correlation
+        'recruitment_correlation': 0.6,  # Weak-moderate correlation
         
         # Density scales
         'mean_spawner_density': 50.0,    # Mean crabs/km²
