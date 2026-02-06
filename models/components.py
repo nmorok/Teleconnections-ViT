@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 # Function for converting grid to patch
 
-class PatchEmbedding(nn.Module):
+'''class PatchEmbedding(nn.Module):
     """ 
     Convert image to patch embeddings.
 
@@ -19,7 +19,7 @@ class PatchEmbedding(nn.Module):
     results in 100 patches of size 5 x 5, each flattened to a vector of size 25.
 
     """
-    def __init__(self, grid_size=50, patch_size=5, in_channels=1, embed_dim=128):
+    def __init__(self, grid_size=50, patch_size=5, in_channels=11, embed_dim=128):
         super().__init__()
         self.grid_size = grid_size
         self.patch_size = patch_size
@@ -31,24 +31,130 @@ class PatchEmbedding(nn.Module):
         nn.init.zeros_(self.projection.bias)
 
     def forward(self, x):
-        # x: (batch_size, channels, height, width) = [B, 2, 50, 50]
+        # x: (batch_size, channels, height, width) = [B, 11, 50, 50]
         batch_size = x.shape[0]
 
         # Unfold into patches: [B, C, H, W] -> [B, C, n_patches_h, n_patches_w, patch_h, patch_w]
         patches = x.unfold(2, self.patch_size, self.patch_size)  # unfold height
         patches = patches.unfold(3, self.patch_size, self.patch_size)  # unfold width
         
-        # patches shape: [B, 2, 10, 10, 5, 5]
+        # patches shape: [B, 11, 10, 10, 5, 5]
         # Rearrange to: [B, n_patches_h, n_patches_w, C, patch_h, patch_w]
         patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous()
         
-        # Flatten patches: [B, 10, 10, 2, 5, 5] -> [B, 100, 50]
+        # Flatten patches: [B, 10, 10, 11, 5, 5] -> [B, 100, 275]
         patches = patches.view(batch_size, self.num_patches, -1)
         
-        # Project patches to embedding dimension: [B, 100, 50] -> [B, 100, 128]
+        # Project patches to embedding dimension: [B, 100, 275] -> [B, 100, 128]
         embeddings = self.projection(patches)
 
+        return embeddings'''
+    
+'''class PatchEmbedding(nn.Module):
+    """
+    Channel-aware patch embedding - processes each channel with its own context
+    before mixing.
+    """
+    def __init__(self, grid_size=50, patch_size=5, in_channels=11, embed_dim=128):
+        super().__init__()
+        self.grid_size = grid_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.num_patches = (grid_size // patch_size) ** 2
+        
+        # Channel-specific embeddings (what each channel represents)
+        # These are added to the raw patch values BEFORE projection
+        self.channel_type_embed = nn.Embedding(in_channels, patch_size * patch_size)
+        # Each channel gets a learned 25-dimensional vector
+        
+        # Projection from (channel-enhanced) patches to embeddings
+        self.projection = nn.Linear(patch_size * patch_size * in_channels, embed_dim)
+        
+        nn.init.xavier_uniform_(self.projection.weight)
+        nn.init.zeros_(self.projection.bias)
+        nn.init.normal_(self.channel_type_embed.weight, std=0.02)
+
+    def forward(self, x):
+        # x: [B, 11, 50, 50]
+        batch_size = x.shape[0]
+
+        # Create patches
+        patches = x.unfold(2, self.patch_size, self.patch_size)
+        patches = patches.unfold(3, self.patch_size, self.patch_size)
+        # Shape: [B, 11, 10, 10, 5, 5]
+        
+        # Rearrange to keep channels organized
+        patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous()
+        # Shape: [B, 10, 10, 11, 5, 5]
+        
+        # Reshape to: [B, 100, 11, 25]
+        patches = patches.view(batch_size, self.num_patches, self.in_channels, -1)
+        
+        # ===== NEW: Add channel-specific information BEFORE mixing =====
+        # Get embeddings for each channel type
+        channel_ids = torch.arange(self.in_channels, device=x.device)
+        channel_embeds = self.channel_type_embed(channel_ids)  # [11, 25]
+        
+        # Add channel-specific embedding to each channel's patch values
+        # Broadcasting: [B, 100, 11, 25] + [11, 25] → [B, 100, 11, 25]
+        patches = patches + channel_embeds.unsqueeze(0).unsqueeze(0)
+        
+        # Now flatten all channels together: [B, 100, 11, 25] → [B, 100, 275]
+        patches_flat = patches.view(batch_size, self.num_patches, -1)
+        
+        # Project to embedding dimension: [B, 100, 275] → [B, 100, 128]
+        embeddings = self.projection(patches_flat)
+        
+        return embeddings'''
+class PatchEmbedding(nn.Module):
+    """
+    Fully seperate channel embeddings - each channel gets its own projection before mixing.
+    """
+    def __init__(self, grid_size=50, patch_size=5, in_channels=11, embed_dim=128, dropout=0.1):
+        super().__init__()
+        self.grid_size = grid_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.num_patches = (grid_size // patch_size) ** 2
+        
+        # Each channel gets its own projection
+        self.embed_dim_per_channel = 12
+        self.channel_projections = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(patch_size * patch_size, self.embed_dim_per_channel),
+                nn.LayerNorm(self.embed_dim_per_channel),  # Normalize
+                nn.Dropout(dropout)  # Prevent overfitting
+            )
+            for _ in range(in_channels)
+        ])
+        
+        # Combine
+        self.combine = nn.Linear(in_channels * self.embed_dim_per_channel, embed_dim)
+        
+    def forward(self, x):
+        batch_size = x.shape[0]
+        
+        # Create patches: [B, 100, 11, 25]
+        patches = x.unfold(2, self.patch_size, self.patch_size)
+        patches = patches.unfold(3, self.patch_size, self.patch_size)
+        patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous()
+        patches = patches.view(batch_size, self.num_patches, self.in_channels, -1)
+        
+        # Process each channel separately
+        channel_embeds = []
+        for c in range(self.in_channels):
+            channel_patches = patches[:, :, c, :]  # [B, 100, 25]
+            channel_embed = self.channel_projections[c](channel_patches)  # [B, 100, 12]
+            channel_embeds.append(channel_embed)
+        
+        # Concatenate: [B, 100, 132]
+        combined = torch.cat(channel_embeds, dim=-1)
+        
+        # Final projection: [B, 100, 128]
+        embeddings = self.combine(combined)
+        
         return embeddings
+
 
 
 
@@ -191,7 +297,7 @@ class MultiHeadAttention(nn.Module):
 
 
 
-    def forward(self, x, mask=None, return_attention=False):
+    def forward(self, x, return_attention=False):
         """
         Forward pass for multi-head attention.
     
@@ -232,11 +338,6 @@ class MultiHeadAttention(nn.Module):
 
 
         # Apply mask if provided (set masked positions to large negative value)
-        if mask is not None:
-            # mask shape: [batch_size, num_patches]
-            # Reshape to: [batch_size, 1, 1, num_patches] for broadcasting
-            mask = mask.unsqueeze(1).unsqueeze(2) # unsqueeze adds dimension of shape 1. so that you can add different shaped tensors to each element. 
-            scores = scores.masked_fill(mask == 0, -1e9) # so that the mask can be applied to all of the heads
 
         # Apply softmax to get attention weights
         attention_weights = F.softmax(scores, dim=-1)  # [batch, heads, patches, patches]

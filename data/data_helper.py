@@ -3,7 +3,9 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
 class CrabDataset(Dataset):
-    def __init__(self, spawner_path, recruit_path, n_years, 
+    def __init__(self, spawner_path, recruit_path, n_years, memory_years = 5,
+                 historical_spawners = None,
+                 historical_recruits = None,
                  spawner_max=None, recruit_max=None):
         """
         Args:
@@ -16,6 +18,26 @@ class CrabDataset(Dataset):
         self.spawners = np.load(spawner_path).astype(np.float32)
         self.recruits = np.load(recruit_path).astype(np.float32)
         self.n_years = n_years
+        self.memory_years = memory_years
+        # Store historical data from previous split
+        self.historical_spawners = historical_spawners  # (n_bootstraps, 5, 50, 50) or None
+        self.historical_recruits = historical_recruits  # (n_bootstraps, 5, 50, 50) or None
+
+        total_samples = len(self.spawners)
+        assert total_samples % n_years == 0, \
+            f"Total samples ({total_samples}) must be divisible by n_years ({n_years})"
+        self.n_bootstraps = total_samples // n_years
+
+        # Verify historical data shape if provided
+        if self.historical_spawners is not None:
+            assert self.historical_spawners.shape[0] == self.n_bootstraps, \
+                f"Historical data must have same number of bootstraps ({self.n_bootstraps})"
+            assert self.historical_spawners.shape[1] == memory_years, \
+                f"Historical data must have {memory_years} years"
+            
+        print(f"Loaded {self.n_bootstraps} bootstrap samples, {self.n_years} years each")
+        if self.historical_spawners is not None:
+            print(f"  Using {memory_years} years of historical data from previous split")
         
         # 2. Handle Spawner Max
         if spawner_max is None:
@@ -41,30 +63,165 @@ class CrabDataset(Dataset):
         return len(self.spawners)
 
     def __getitem__(self, idx):
-        raw_spawner = self.spawners[idx]
-        raw_recruit = self.recruits[idx]
+        # Determine which bootstrap and which year
+        bootstrap_idx = idx // self.n_years
         year_idx = idx % self.n_years
+    
         
-        # Scale to [0, 1]
-        spawner_scaled = raw_spawner / self.spawner_max
-        recruit_scaled = raw_recruit / self.recruit_max
+        # Get current spawner and recruit (scaled)
+        current_spawner = self.spawners[idx] / self.spawner_max  # (50, 50)
+        current_recruit = self.recruits[idx] / self.recruit_max  # (50, 50)
         
-        # Return as [1, 50, 50] tensors
-        return (torch.tensor(spawner_scaled, dtype=torch.float32).unsqueeze(0),
-                torch.tensor(recruit_scaled, dtype=torch.float32).unsqueeze(0),
-                torch.tensor(year_idx, dtype=torch.long))
+        # Initialize memory bank arrays (5 years of history)
+        memory_spawners = np.full((self.memory_years, 50, 50), -1.0, dtype=np.float32)
+        memory_recruits = np.full((self.memory_years, 50, 50), -1.0, dtype=np.float32)
+        temporal_mask = np.zeros(self.memory_years, dtype=np.float32)
+        
+        # Fill in historical data where available (stay within same bootstrap!)
+        for i in range(self.memory_years):
+            lookback = i + 1  # 1, 2, 3, 4, 5 years back
+            historical_year = year_idx - lookback
+            
+            if historical_year >= 0:
+                # Calculate flat index for same bootstrap, historical year
+                historical_idx = bootstrap_idx * self.n_years + historical_year
+                
+                # Get historical data
+                memory_spawners[i] = self.spawners[historical_idx] / self.spawner_max
+                memory_recruits[i] = self.recruits[historical_idx] / self.recruit_max
+                temporal_mask[i] = 1.0  # Mark this year as valid
+            elif self.historical_spawners is not None and self.historical_recruits is not None:
+                # Historical is in previous split
+                # historical_year is negative, so -1 means last year of previous split, -2 means second-to-last year, etc.
+                historical_idx = self.memory_years + historical_year # convert to positive index (0 to memory_years-1)
+                if historical_idx >= 0:
+                    memory_spawners[i] = self.historical_spawners[bootstrap_idx, historical_idx] / self.spawner_max
+                    memory_recruits[i] = self.historical_recruits[bootstrap_idx, historical_idx] / self.recruit_max
+                    temporal_mask[i] = 1.0  # Mark this year as valid   
+        
+        # Stack all channels: [current_spawner, 5x spawner history, 5x recruit history]
+        # Total: 1 + 5 + 5 = 11 channels
+        input_tensor = torch.cat([
+            torch.tensor(current_spawner, dtype=torch.float32).unsqueeze(0),  # [1, 50, 50]
+            torch.tensor(memory_spawners, dtype=torch.float32),                # [5, 50, 50]
+            torch.tensor(memory_recruits, dtype=torch.float32)                 # [5, 50, 50]
+        ], dim=0)  # Result: [11, 50, 50]
+        
+        target_tensor = torch.tensor(current_recruit, dtype=torch.float32).unsqueeze(0)  # [1, 50, 50]
+        temporal_mask_tensor = torch.tensor(temporal_mask, dtype=torch.float32)  # [5]
+        
+        return (input_tensor, target_tensor, temporal_mask_tensor, torch.tensor(year_idx, dtype=torch.long))
     
 
-def get_dataloaders(batch_size=5, n_years=30):
+def get_last_n_years(spawner_path, recruit_path, n_bootstraps, n_years_total, n_years_to_extract):
     """
-    Helper function to initialize the split loaders.
+    Extract the last n_years_to_extract years from a dataset to use as historical context.
+    
+    Args:
+        spawner_path: Path to spawner data
+        recruit_path: Path to recruit data  
+        n_bootstraps: Number of bootstrap samples
+        n_years_total: Total years in this dataset
+        n_years_to_extract: How many years to extract (e.g., 5)
+        
+    Returns:
+        historical_spawners: (n_bootstraps, n_years_to_extract, 50, 50)
+        historical_recruits: (n_bootstraps, n_years_to_extract, 50, 50)
+    """
+    spawners = np.load(spawner_path).astype(np.float32)
+    recruits = np.load(recruit_path).astype(np.float32)
+    
+    historical_spawners = np.zeros((n_bootstraps, n_years_to_extract, 50, 50), dtype=np.float32)
+    historical_recruits = np.zeros((n_bootstraps, n_years_to_extract, 50, 50), dtype=np.float32)
+    
+    for bootstrap_idx in range(n_bootstraps):
+        # Get the last n_years_to_extract years of this bootstrap
+        start_year = n_years_total - n_years_to_extract
+        for year_offset in range(n_years_to_extract):
+            global_idx = bootstrap_idx * n_years_total + start_year + year_offset
+            historical_spawners[bootstrap_idx, year_offset] = spawners[global_idx]
+            historical_recruits[bootstrap_idx, year_offset] = recruits[global_idx]
+    
+    return historical_spawners, historical_recruits
+
+
+def get_dataloaders(batch_size=5, memory_years=5, 
+                   train_years=22, val_years=5, test_years=3):
+    """
+    Helper function to initialize the split loaders with proper temporal continuity.
+    
+    Args:
+        batch_size: Batch size for training
+        memory_years: Years of history to include (default 5)
+        train_years: Number of years in training set (default 22, years 0-21)
+        val_years: Number of years in validation set (default 5, years 22-26)
+        test_years: Number of years in test set (default 3, years 27-29)
     """
     data_dir = "data/dummy/splits/"
+    
+    # First, determine number of bootstraps from training data
+    train_spawners = np.load(data_dir + "train_spawners.npy")
+    n_bootstraps = len(train_spawners) // train_years
+    print(f"Detected {n_bootstraps} bootstrap samples")
 
-    # Initialize datasets with the file paths
-    train_ds = CrabDataset(data_dir + "train_spawners.npy", data_dir + "train_recruits.npy", n_years=n_years, spawner_max=None, recruit_max=None)
-    val_ds = CrabDataset(data_dir + "val_spawners.npy", data_dir + "val_recruits.npy", n_years=n_years, spawner_max=train_ds.spawner_max, recruit_max=train_ds.recruit_max)
-    test_ds = CrabDataset(data_dir + "test_spawners.npy", data_dir + "test_recruits.npy", n_years=n_years, spawner_max=train_ds.spawner_max, recruit_max=train_ds.recruit_max)
+    # 1. Training dataset (no historical data needed)
+    train_ds = CrabDataset(
+        data_dir + "train_spawners.npy", 
+        data_dir + "train_recruits.npy",
+        n_years=train_years,
+        memory_years=memory_years,
+        historical_spawners=None,
+        historical_recruits=None,
+        spawner_max=None, 
+        recruit_max=None
+    )
+    
+    # 2. Extract last 5 years from training for validation historical context
+    print("\nExtracting historical context from training data for validation...")
+    train_hist_spawners, train_hist_recruits = get_last_n_years(
+        data_dir + "train_spawners.npy",
+        data_dir + "train_recruits.npy",
+        n_bootstraps=n_bootstraps,
+        n_years_total=train_years,
+        n_years_to_extract=memory_years
+    )
+    
+    # 3. Validation dataset (with training history)
+    val_ds = CrabDataset(
+        data_dir + "val_spawners.npy", 
+        data_dir + "val_recruits.npy",
+        n_years=val_years,
+        memory_years=memory_years,
+        historical_spawners=train_hist_spawners,
+        historical_recruits=train_hist_recruits,
+        spawner_max=train_ds.spawner_max, 
+        recruit_max=train_ds.recruit_max
+    )
+    
+    # 4. Extract last 5 years from validation for test historical context
+    print("\nExtracting historical context from validation data for test...")
+    val_hist_spawners, val_hist_recruits = get_last_n_years(
+        data_dir + "val_spawners.npy",
+        data_dir + "val_recruits.npy",
+        n_bootstraps=n_bootstraps,
+        n_years_total=val_years,
+        n_years_to_extract=memory_years
+    )
+    
+    # 5. Test dataset (with validation history)
+    test_ds = CrabDataset(
+        data_dir + "test_spawners.npy", 
+        data_dir + "test_recruits.npy",
+        n_years=test_years,
+        memory_years=memory_years,
+        historical_spawners=val_hist_spawners,
+        historical_recruits=val_hist_recruits,
+        spawner_max=train_ds.spawner_max, 
+        recruit_max=train_ds.recruit_max
+    )
+    print("\nData shapes:")
+    print(train_hist_spawners.shape, train_hist_recruits.shape)
+    print(val_hist_spawners.shape, val_hist_recruits.shape, "\n")
 
     # Create loaders 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)

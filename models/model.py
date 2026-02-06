@@ -29,7 +29,7 @@ class CrabTransformer(nn.Module):
 
 
         """
-    def __init__(self, grid_size=50, patch_size=5, in_channels=1, embed_dim=128, num_heads=8, num_layers=6, d_ff=512, mask=None, dropout=0.1):
+    def __init__(self, grid_size=50, patch_size=5, in_channels=11, embed_dim=128, num_heads=8, num_layers=6, d_ff=512, dropout=0.1):
         super().__init__()
 
         # initialize all of the variables
@@ -40,7 +40,6 @@ class CrabTransformer(nn.Module):
         self.num_heads = num_heads
         self.num_layers = num_layers
         self.d_ff = d_ff
-        self.mask = mask
         self.dropout = dropout
         self.n_patches = (grid_size // patch_size) ** 2
         self.patch_grid_size = grid_size // patch_size  # e.g., 50/5=10
@@ -68,6 +67,7 @@ class CrabTransformer(nn.Module):
         Args:
             x: Input spawner grids [batch, 1, 50, 50]
             year_indices: Year indices [batch]
+            temporal_mask: Temporal mask [batch, num_patches] (default: None)
             return_attention: Whether to return attention weights
         
         Returns:
@@ -96,10 +96,10 @@ class CrabTransformer(nn.Module):
         for block in self.transformer_blocks:
             
             if return_attention:
-                x, attn = block(x, self.mask, return_attention=True)  # [batch_size, num_patches, embed_dim], [batch_size, heads, patches, patches]
+                x, attn = block(x, return_attention=True)  # [batch_size, num_patches, embed_dim], [batch_size, heads, patches, patches]
                 attention_maps.append(attn)
             else:
-                x = block(x, self.mask)  # [batch_size, num_patches, embed_dim]
+                x = block(x)  # [batch_size, num_patches, embed_dim]
         
         x = self.norm(x)  # [batch_size, num_patches, embed_dim]
 
