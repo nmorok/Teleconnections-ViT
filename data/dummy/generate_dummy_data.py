@@ -405,6 +405,7 @@ def create_spawner_recruit_pairs(
     recruitment_correlation=0.3,
     mean_spawner_density=50.0,
     mean_recruit_density=30.0,
+    lag = 3,
     seed=2026
 ):
     """
@@ -496,7 +497,14 @@ def create_spawner_recruit_pairs(
             
             # Index in flattened arrays
             recruit_idx = b * n_recruit_years + t
-            spawner_idx = b * n_spawner_years + t  # Corresponding spawner year
+            spawner_year = t - lag  # Spawner year is lag years before recruit year
+
+            if spawner_year < 0:
+                # No spawner data available for early recruit years
+                # Just use independent variation (correlation = 0)
+                recruits[recruit_idx] = recruits_base[recruit_idx]
+                continue
+            spawner_idx = b * n_spawner_years + spawner_year  # Corresponding spawner year
             
             # Mix formula: R = α×S + √(1-α²)×ε
             # This ensures Corr(R,S) = α
@@ -706,15 +714,16 @@ def main():
         'spatial_kappa': 0.3,         # ~60km correlation range at 20km resolution
         
         # Temporal correlation  
-        'temporal_rho': 0.3,          # Strong year-to-year persistence
+        'temporal_rho': 0.6,          # Strong year-to-year persistence
         
         # Spawner-recruitment relationship
-        'recruitment_correlation': 0.6,  # Weak-moderate correlation
+        'recruitment_correlation': 0.5,  # Weak-moderate correlation
         
         # Density scales
         'mean_spawner_density': 50.0,    # Mean crabs/km²
-        'mean_recruit_density': 30.0,    # Typically lower than spawners
-        
+        'mean_recruit_density': 50.0,    # Typically lower than spawners
+
+        'lag': 0,                        # Recruit year corresponds to spawner year - 3
         # Reproducibility
         'seed': 2026
     }

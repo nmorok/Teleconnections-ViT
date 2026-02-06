@@ -344,8 +344,13 @@ class CrabTransformer(nn.Module):
                 # Normal initialization for embeddings
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
         
+        if hasattr(self.decoder, 'conv_out'):
+            print("✓ Applying Bias Initialization Surgery to Decoder (-3.0)")
+            nn.init.constant_(self.decoder.conv_out.bias, -3.0)
+        else:
+            print("⚠️ WARNING: Could not find 'conv_out' in decoder to apply bias fix.")
+        
         print("✓ Weight initialization complete")
-
 
 
 
