@@ -110,7 +110,7 @@ class CrabTransformer(nn.Module):
         x = self.decoder(x)  # [batch, channels, n_patches, n_patches] 
 
         #x = torch.sigmoid(x)  # [batch_size, 1, grid_size, grid_size]
-        x = torch.softplus(x)  # [batch_size, 1, grid_size, grid_size]
+        x = F.softplus(x)  # [batch_size, 1, grid_size, grid_size]
 
 
         if return_attention:
