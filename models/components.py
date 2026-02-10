@@ -131,7 +131,7 @@ class PatchEmbedding(nn.Module):
         # Combine
         self.combine = nn.Linear(in_channels * self.embed_dim_per_channel, embed_dim)
         
-    def forward(self, x):
+    def forward(self, x, mask=None):
         batch_size = x.shape[0]
         
         # Create patches: [B, 100, 11, 25]
@@ -145,6 +145,18 @@ class PatchEmbedding(nn.Module):
         for c in range(self.in_channels):
             channel_patches = patches[:, :, c, :]  # [B, 100, 25]
             channel_embed = self.channel_projections[c](channel_patches)  # [B, 100, 12]
+            # --- APPLY TEMPORAL MASKING ---
+            # Channel 0 is ALWAYS valid (current spawner).
+            # Channels 1-5 = Spawner History; Channels 6-10 = Recruit History.
+            if mask is not None:
+                if 1 <= c <= 5: # Spawner history
+                    # mask[:, 0] applies to lookback-1 (channel 1), etc.
+                    m = mask[:, c-1].view(batch_size, 1, 1) 
+                    channel_embed = channel_embed * m
+                elif 6 <= c <= 10: # Recruit history
+                    # mask[:, 0] applies to lookback-1 (channel 6), etc.
+                    m = mask[:, c-6].view(batch_size, 1, 1)
+                    channel_embed = channel_embed * m
             channel_embeds.append(channel_embed)
         
         # Concatenate: [B, 100, 132]

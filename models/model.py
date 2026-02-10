@@ -62,7 +62,7 @@ class CrabTransformer(nn.Module):
         self._init_weights()
 
 
-    def forward(self, x, year_indices, return_attention=False):
+    def forward(self, x, year_indices, temporal_mask=None, return_attention=False):
         """
         Args:
             x: Input spawner grids [batch, 1, 50, 50]
@@ -81,7 +81,7 @@ class CrabTransformer(nn.Module):
             attention_maps = []
 
         # Convert grid to patch embeddings
-        x = self.patch_embed(x)  # [batch_size, num_patches, embed_dim] [B, 1, 50, 50] → [B, 100, 128]
+        x = self.patch_embed(x, mask=temporal_mask)  # [batch_size, num_patches, embed_dim] [B, 1, 50, 50] → [B, 100, 128]
 
         # Add positional encoding
         x = self.position_encode(x)  # [batch_size, num_patches, embed_dim] [B, 100, 128]
