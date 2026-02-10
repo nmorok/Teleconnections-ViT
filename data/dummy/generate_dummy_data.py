@@ -226,9 +226,6 @@ def sample_gmrf(Q, n_samples=1):
     return np.array(samples)
 
 
-
-
-
 def create_spatiotemporal_gmrf_data(
     grid_size=10,
     n_years=30,
@@ -366,7 +363,13 @@ def create_spatiotemporal_gmrf_data(
     
     # Apply log-normal-ish transformation to get positive values
     # exp() creates right-skewed distribution (like real crab data)
-    data_transformed = mean_density * np.exp(data_standardized * 0.5)
+    data_transformed = mean_density * np.exp(data_standardized * 1.5)
+    
+    # 3. Apply the "Zero-Floor" (The Tweedie mass at zero)
+    # Adjust the threshold (e.g., 5.0) to get more or fewer zeros
+    data_transformed = data_transformed - 15.0
+    data_transformed[data_transformed < 15.0] = 0
+
     
     # -------------------------------------------------------------------------
     # Step 4: Package results
@@ -404,7 +407,7 @@ def create_spawner_recruit_pairs(
     temporal_rho=0.7,
     recruitment_correlation=0.3,
     mean_spawner_density=50.0,
-    mean_recruit_density=30.0,
+    mean_recruit_density=50.0,
     lag = 3,
     seed=2026
 ):
@@ -510,7 +513,7 @@ def create_spawner_recruit_pairs(
             # This ensures Corr(R,S) = α
             recruits[recruit_idx] = (
                 recruitment_correlation * spawners[spawner_idx] +
-                np.sqrt(1 - recruitment_correlation**2) * recruits_base[recruit_idx]
+                np.sqrt(1 - recruitment_correlation**2) * recruits_base[recruit_idx] 
             )
     
     # Verify correlation (check a few samples)
@@ -539,7 +542,8 @@ def create_spawner_recruit_pairs(
         **params_s,  # Include all spawner params
         'n_recruit_years': n_recruit_years,
         'recruitment_correlation': recruitment_correlation,
-        'mean_recruit_density': mean_recruit_density
+        'mean_recruit_density': mean_recruit_density,
+        'lag': lag
     }
 
     print(spawners[:10])
@@ -552,129 +556,122 @@ def create_spawner_recruit_pairs(
 # ==============================================================================
 
 def visualize_gmrf_properties(spawners, recruits, params, output_dir="./output"):
-    """
-    Create comprehensive visualizations of generated GMRF data.
-    
-    Creates 3 figures:
-    1. Spatial patterns (example fields from different years)
-    2. Temporal evolution (time series at one location)
-    3. Spawner-recruitment relationship (scatterplot)
-    
-    Args:
-        spawners: array, shape (n_spawner_samples, grid_size, grid_size)
-        recruits: array, shape (n_recruit_samples, grid_size, grid_size)
-        params: dict, parameters used for generation
-        output_dir: str, directory to save figures
-    """
-    
     grid_size = params['grid_size']
     n_years = params['n_years']
     n_bootstraps = params['n_bootstraps']
+    lag = params.get('lag', 3)
     
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # -------------------------------------------------------------------------
-    # Figure 1: Spatial patterns over time
+    # Figure 1: Spatial patterns (3 standard snapshots)
     # -------------------------------------------------------------------------
-    
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    fig.suptitle('Spatial Patterns Over Time (Bootstrap 0)', fontsize=16)
-    
-    # Show 3 years from first bootstrap
+    fig1, axes1 = plt.subplots(2, 3, figsize=(15, 10))
+    fig1.suptitle('Spatial Patterns Over Time (Bootstrap 0)', fontsize=16)
     years_to_show = [0, n_years//2, n_years-1]
-    
     for i, year_idx in enumerate(years_to_show):
-        # Spawners
-        ax = axes[0, i]
-        im = ax.imshow(spawners[year_idx], cmap='viridis', aspect='auto')
-        ax.set_title(f'Spawners: Year {year_idx+1}')
-        ax.axis('off')
-        plt.colorbar(im, ax=ax, label='Density')
+        im_s = axes1[0, i].imshow(spawners[year_idx], cmap='viridis')
+        axes1[0, i].set_title(f'Spawners: Year {year_idx+1}')
+        axes1[0, i].axis('off')
+        plt.colorbar(im_s, ax=axes1[0, i])
         
-        # Recruits (if available)
-        if year_idx < len(recruits) // n_bootstraps:
-            ax = axes[1, i]
-            im = ax.imshow(recruits[year_idx], cmap='plasma', aspect='auto')
-            ax.set_title(f'Recruits: Year {year_idx+1}')
-            ax.axis('off')
-            plt.colorbar(im, ax=ax, label='Density')
-    
-    plt.tight_layout()
-    plt.savefig(output_dir / 'gmrf_spatial_patterns.png', dpi=150, bbox_inches='tight')
-    print(f"Saved: {output_dir / 'gmrf_spatial_patterns.png'}")
-    plt.close()
-    
+        im_r = axes1[1, i].imshow(recruits[year_idx], cmap='plasma')
+        axes1[1, i].set_title(f'Recruits: Year {year_idx+1}')
+        axes1[1, i].axis('off')
+        plt.colorbar(im_r, ax=axes1[1, i])
+    fig1.tight_layout()
+    fig1.savefig(output_dir / 'gmrf_spatial_patterns.png', dpi=150)
+    plt.close(fig1)
+
     # -------------------------------------------------------------------------
-    # Figure 2: Temporal evolution
+    # Figure 2: Temporal evolution (Center Pixel)
     # -------------------------------------------------------------------------
-    
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    # Extract time series at center pixel
+    fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5))
     center = grid_size // 2
     
-    # Spawner time series (first bootstrap)
-    spawner_ts = spawners[:n_years, center, center]
-    axes[0].plot(range(1, n_years+1), spawner_ts, 'o-', linewidth=2, markersize=6)
-    axes[0].set_xlabel('Year')
-    axes[0].set_ylabel('Density')
-    axes[0].set_title(f'Spawner Temporal Evolution (Center Pixel)\nρ = {params["temporal_rho"]:.2f}')
-    axes[0].grid(True, alpha=0.3)
+    axes2[0].plot(range(1, n_years+1), spawners[:n_years, center, center], 'o-')
+    axes2[0].set_title('Spawner Center Pixel TS')
     
-    # Recruit time series (first bootstrap)
-    n_recruit_years = params['n_recruit_years']
-    recruit_ts = recruits[:n_recruit_years, center, center]
-    axes[1].plot(range(1, n_recruit_years+1), recruit_ts, 'o-', linewidth=2, markersize=6, color='orange')
-    axes[1].set_xlabel('Year')
-    axes[1].set_ylabel('Density')
-    axes[1].set_title(f'Recruitment Temporal Evolution (Center Pixel)\nρ = {params["temporal_rho"]:.2f}')
-    axes[1].grid(True, alpha=0.3)
+    axes2[1].plot(range(1, n_years+1), recruits[:n_years, center, center], 'o-', color='orange')
+    axes2[1].set_title('Recruit Center Pixel TS')
     
-    plt.tight_layout()
-    plt.savefig(output_dir / 'gmrf_temporal_evolution.png', dpi=150, bbox_inches='tight')
-    print(f"Saved: {output_dir / 'gmrf_temporal_evolution.png'}")
-    plt.close()
-    
+    fig2.tight_layout()
+    fig2.savefig(output_dir / 'gmrf_temporal_evolution.png', dpi=150)
+    plt.close(fig2)
+
     # -------------------------------------------------------------------------
-    # Figure 3: Spawner-recruitment relationship
+    # NEW Figure: 5 Consecutive Years (Temporal Sequence)
     # -------------------------------------------------------------------------
+    mid_start = n_years // 2 - 2
+    years_5 = range(mid_start, mid_start + 5)
+    fig3, axes3 = plt.subplots(2, 5, figsize=(20, 8))
+    fig3.suptitle(f'Consecutive 5-Year Sequence (Years {mid_start+1}-{mid_start+5})', fontsize=18)
     
-    fig, ax = plt.subplots(figsize=(8, 8))
+    for i, year_idx in enumerate(years_5):
+        axes3[0, i].imshow(spawners[year_idx], cmap='viridis')
+        axes3[0, i].set_title(f'Spawners Yr {year_idx+1}')
+        axes3[0, i].axis('off')
+        
+        axes3[1, i].imshow(recruits[year_idx], cmap='plasma')
+        axes3[1, i].set_title(f'Recruits Yr {year_idx+1}')
+        axes3[1, i].axis('off')
+    fig3.tight_layout()
+    fig3.savefig(output_dir / 'gmrf_5year_sequence.png', dpi=150)
+    plt.close(fig3)
+
+    # -------------------------------------------------------------------------
+    # NEW Figure: Lagged Comparison (Biological Prediction Alignment)
+    # -------------------------------------------------------------------------
+    fig4, axes4 = plt.subplots(2, 4, figsize=(18, 8))
+    fig4.suptitle(f'Lagged Biological Alignment (Lag = {lag} years)', fontsize=18)
     
-    # Sample points for scatterplot (don't plot all 2500×2400 points!)
+    # Select 4 display years (Year T vs Recruit Year T+Lag)
+    example_years = [0, n_years//4, n_years//2, n_years - lag - 1]
+    example_years = [y for y in example_years if y + lag < n_years][:4]
+
+    for i, s_yr in enumerate(example_years):
+        r_yr = s_yr + lag
+        axes4[0, i].imshow(spawners[s_yr], cmap='viridis')
+        axes4[0, i].set_title(f'Spawners (Year {s_yr+1})')
+        axes4[0, i].axis('off')
+        
+        axes4[1, i].imshow(recruits[r_yr], cmap='plasma')
+        axes4[1, i].set_title(f'Recruits (Year {r_yr+1})\n[S_Year {s_yr+1} + Lag {lag}]')
+        axes4[1, i].axis('off')
+    fig4.tight_layout()
+    fig4.savefig(output_dir / 'gmrf_lagged_comparison.png', dpi=150)
+    plt.close(fig4)
+
+    # -------------------------------------------------------------------------
+    # Figure 5: Aggregated Temporal Evolution
+    # -------------------------------------------------------------------------
+    fig5, axes5 = plt.subplots(1, 2, figsize=(14, 5))
+    axes5[0].plot(range(1, n_years+1), np.sum(spawners[:n_years], axis=(1,2)), 'o-')
+    axes5[0].set_title('Aggregated Spawner Biomass')
+    
+    axes5[1].plot(range(1, n_years+1), np.sum(recruits[:n_years], axis=(1,2)), 'o-', color='orange')
+    axes5[1].set_title('Aggregated Recruit Biomass')
+    
+    fig5.tight_layout()
+    fig5.savefig(output_dir / 'gmrf_agg_temporal_evolution.png', dpi=150)
+    plt.close(fig5)
+
+    # -------------------------------------------------------------------------
+    # Figure 6: Diagnostics (Density Histograms & S-R Scatter)
+    # -------------------------------------------------------------------------
+    fig6, axes6 = plt.subplots(1, 2, figsize=(16, 7))
+    axes6[0].hist(recruits.flatten(), bins=100, color='salmon', alpha=0.7, log=True)
+    axes6[0].set_title('Recruit Density (Log Scale Hist)')
+    
     n_samples = min(10000, spawners.size)
-    indices = np.random.choice(spawners.size, n_samples, replace=False)
+    idx = np.random.choice(spawners.size, n_samples, replace=False)
+    axes6[1].scatter(spawners.flatten()[idx], recruits.flatten()[idx], alpha=0.1, s=2)
+    axes6[1].set_title('Global S-R Correlation')
     
-    spawn_flat = spawners.flatten()[indices]
-    recruit_flat = recruits.flatten()[indices]
-    
-    # Scatterplot
-    ax.scatter(spawn_flat, recruit_flat, alpha=0.1, s=1, c='blue')
-    ax.set_xlabel('Spawner Density', fontsize=12)
-    ax.set_ylabel('Recruitment Density', fontsize=12)
-    
-    # Calculate and show correlation
-    corr = np.corrcoef(spawners.flatten(), recruits.flatten())[0, 1]
-    ax.set_title(f'Spawner-Recruitment Relationship\nr = {corr:.3f} (target = {params.get("recruitment_correlation", "N/A")})',
-                fontsize=14)
-    
-    # Add reference line
-    xlim = ax.get_xlim()
-    ylim = ax.get_ylim()
-    min_val = min(xlim[0], ylim[0])
-    max_val = max(xlim[1], ylim[1])
-    ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.5, linewidth=2, label='1:1 line')
-    ax.legend()
-    
-    ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(output_dir / 'gmrf_spawner_recruit_correlation.png', dpi=150, bbox_inches='tight')
-    print(f"Saved: {output_dir / 'gmrf_spawner_recruit_correlation.png'}")
-    plt.close()
-    
-    print("\nVisualization complete!")
+    fig6.tight_layout()
+    fig6.savefig(output_dir / 'gmrf_diagnostics.png', dpi=150)
+    plt.close(fig6)
 
 
 # ==============================================================================
@@ -714,16 +711,16 @@ def main():
         'spatial_kappa': 0.3,         # ~60km correlation range at 20km resolution
         
         # Temporal correlation  
-        'temporal_rho': 0.6,          # Strong year-to-year persistence
+        'temporal_rho': 0.7,          # Strong year-to-year persistence
         
         # Spawner-recruitment relationship
-        'recruitment_correlation': 0.5,  # Weak-moderate correlation
+        'recruitment_correlation': 0.9,  # Weak-moderate correlation
         
         # Density scales
         'mean_spawner_density': 50.0,    # Mean crabs/km²
-        'mean_recruit_density': 50.0,    # Typically lower than spawners
+        'mean_recruit_density': 30.0,    # Typically lower than spawners
 
-        'lag': 0,                        # Recruit year corresponds to spawner year - 3
+        'lag': 3,                        # Recruit year corresponds to spawner year - 3
         # Reproducibility
         'seed': 2026
     }
@@ -778,7 +775,114 @@ def main():
     # -------------------------------------------------------------------------
     # Summary
     # -------------------------------------------------------------------------
+
+    # Check zeros
+    n_zeros = (spawners == 0).sum()
+    pct_zeros = n_zeros / spawners.size * 100
+
+    print(f"Spawners Zeros: {pct_zeros:.1f}%")
+
+    # Should see 30-70% zeros
+    if 20 <= pct_zeros <= 80:
+        print("✅ Spawners Proper Tweedie distribution!")
+    else:
+        print("⚠️ Spawners Adjust mean_density or phi parameters")
     
+    
+    n_zeros = (recruits == 0).sum()
+    pct_zeros = n_zeros / recruits.size * 100
+
+    print(f"Recruits Zeros: {pct_zeros:.1f}%")
+
+    # Should see 30-70% zeros
+    if 20 <= pct_zeros <= 80:
+        print("✅ Recruits Proper Tweedie distribution!")
+    else:
+        print("⚠️ Recruits Adjust mean_density or phi parameters")
+
+    pixel_coord = (25, 25)  # Center pixel
+    # Extract time series for one bootstrap
+    ts = recruits[:30, pixel_coord[0], pixel_coord[1]] 
+    
+    # Correlation between Year(t) and Year(t-lag)
+    lag_corr = np.corrcoef(ts[:-config['lag']], ts[config['lag']:])[0, 1]
+    lag1_corr = np.corrcoef(ts[:-1], ts[1:])[0, 1]
+    print(f"Temporal Autocorrelation (Lag {config['lag']}): {lag_corr:.3f}")
+
+    # --- New Validation Checks ---
+    print("\n" + "="*80)
+    print("RUNNING TWEEDIE VALIDATION")
+    print("="*80)
+    
+    # 1. Plot Histograms
+    plot_density_histograms(spawners, recruits)
+
+    # 2. Run Mean-Variance Test
+    plt.figure(figsize=(10, 6))
+    p_s = run_tweedie_test(spawners, "Spawners")
+    p_r = run_tweedie_test(recruits, "Recruits")
+    plt.title("Tweedie Power Law Test (Target: 1 < p < 2)")
+    plt.xlabel("log(Mean)")
+    plt.ylabel("log(Variance)")
+    plt.legend()
+    plt.show()
+
+    print(f"Spawner Tweedie Index (p): {p_s:.2f}")
+    print(f"Recruit Tweedie Index (p): {p_r:.2f}")
+    
+    if 1.1 <= p_s <= 1.9:
+        print("✅ Spawners: Variance scales with Mean like a Tweedie/Compound-Poisson!")
+    else:
+        print("⚠️ Spawners: Scaling is non-Tweedie. Consider increasing skew.")
+    
+    # Assuming spawners and recruits are matched in time (or correctly lagged) add the lag to the correlation check
+    overall_corr = np.corrcoef(spawners.flatten(), recruits.flatten())[0, 1]
+    print(f"Global S-R Correlation: {overall_corr:.3f}")
+    
+    # 1. Get the 2D fields for specific bootstrap and year
+    # Note: Indices assume standard flattening [B0Y0, B0Y1... B1Y0...]
+    bootstrap_idx = 0  # First bootstrap
+    year_idx = 0       # First year (1988 for spawners, 1988 for recruits)
+    n_years = 30 # standard
+    idx = bootstrap_idx * n_years + year_idx
+    
+    S = spawners[idx]
+    R = recruits[idx]
+    
+    # 2. Calculate Correlation
+    # We flatten them to 1D arrays to compare pixel-to-pixel
+    corr = np.corrcoef(S.flatten(), R.flatten())[0,1]
+    
+    print(f"\n--- DIAGNOSTIC: Bootstrap {bootstrap_idx}, Year {year_idx} ---")
+    print(f"Calculated Spatial Correlation: {corr:.4f}")
+    
+    # 3. Plot
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    
+    # Spawner Field
+    im1 = axes[0].imshow(S, origin='lower', cmap='viridis')
+    axes[0].set_title(f"Spawners (Year {year_idx})")
+    plt.colorbar(im1, ax=axes[0])
+    
+    # Recruit Field
+    im2 = axes[1].imshow(R, origin='lower', cmap='plasma')
+    axes[1].set_title(f"Recruits (Year {year_idx})\nTarget Corr=0.7")
+    plt.colorbar(im2, ax=axes[1])
+    
+    # Scatter Plot (Pixel vs Pixel)
+    axes[2].scatter(S.flatten(), R.flatten(), alpha=0.3, s=2)
+    axes[2].set_xlabel("Spawner Density (Pixel Value)")
+    axes[2].set_ylabel("Recruit Density (Pixel Value)")
+    axes[2].set_title(f"Pixel-wise Correlation: {corr:.2f}")
+    
+    # Add trend line
+    m, b = np.polyfit(S.flatten(), R.flatten(), 1)
+    x_range = np.array([S.min(), S.max()])
+    axes[2].plot(x_range, m*x_range + b, 'r--', label='Trend')
+    axes[2].legend()
+    
+    plt.show()
+        
     print("\n" + "="*80)
     print("GENERATION COMPLETE!")
     print("="*80)
@@ -790,7 +894,49 @@ def main():
     print("  4. gmrf_spatial_patterns.png - Spatial visualization")
     print("  5. gmrf_temporal_evolution.png - Temporal visualization")
     print("  6. gmrf_spawner_recruit_correlation.png - Relationship plot")
+
+
+def run_tweedie_test(data, label="Data"):
+    """
+    Tweedie Test: Checks if Variance scales with Mean (Power Law).
+    Mathematically: Var = phi * Mean^p. 
+    On a log-log plot, the slope of the line is the Tweedie index 'p'.
+    Target: 1 < p < 2.
+    """
+    # Sample patches to get local variations in mean and variance
+    means, vars = [], []
+    for _ in range(1000):
+        # Randomly sample a 5x5 patch from a random bootstrap/year
+        b = np.random.randint(0, data.shape[0])
+        r = np.random.randint(0, data.shape[1]-5)
+        c = np.random.randint(0, data.shape[2]-5)
+        
+        patch = data[b, r:r+5, c:c+5]
+        m, v = np.mean(patch), np.var(patch)
+        if m > 0.1 and v > 0.1: # Exclude dead zones for the log-test
+            means.append(m)
+            vars.append(v)
+            
+    log_m, log_v = np.log(means), np.log(vars)
+    p_index, intercept = np.polyfit(log_m, log_v, 1)
     
+    plt.scatter(log_m, log_v, alpha=0.2, label=f'{label} (p={p_index:.2f})')
+    plt.plot(log_m, p_index*log_m + intercept, '--')
+    return p_index
+
+def plot_density_histograms(spawners, recruits):
+    """Plots log-scaled histograms to see the zero-mass and the skewed tail."""
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    
+    for ax, data, title, color in zip(axes, [spawners, recruits], 
+                                     ["Spawner Densities", "Recruit Densities"], 
+                                     ["blue", "red"]):
+        ax.hist(data.flatten(), bins=100, color=color, alpha=0.6, log=True)
+        ax.set_title(f"{title}\nZero %: {100*np.mean(data==0):.1f}%")
+        ax.set_xlabel("Density")
+        ax.set_ylabel("Frequency (Log Scale)")
+        ax.grid(True, alpha=0.3)
+    plt.show()
 
 if __name__ == "__main__":
     main()
