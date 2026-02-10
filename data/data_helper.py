@@ -153,7 +153,7 @@ def get_last_n_years(spawner_path, recruit_path, n_bootstraps, n_years_total, n_
 
 
 def get_dataloaders(batch_size=5, memory_years=5, 
-                   train_years=22, val_years=5, test_years=3):
+                   train_years=22, val_years=5, test_years=3, transform="log"):
     """
     Helper function to initialize the split loaders with proper temporal continuity.
     
@@ -163,6 +163,7 @@ def get_dataloaders(batch_size=5, memory_years=5,
         train_years: Number of years in training set (default 22, years 0-21)
         val_years: Number of years in validation set (default 5, years 22-26)
         test_years: Number of years in test set (default 3, years 27-29)
+        transform: Whether to apply log transform (default "log")
     """
     data_dir = "data/dummy/splits/"
     
@@ -180,7 +181,8 @@ def get_dataloaders(batch_size=5, memory_years=5,
         historical_spawners=None,
         historical_recruits=None,
         spawner_max=None, 
-        recruit_max=None
+        recruit_max=None,
+        transform=transform
     )
     
     # 2. Extract last 5 years from training for validation historical context
@@ -202,7 +204,8 @@ def get_dataloaders(batch_size=5, memory_years=5,
         historical_spawners=train_hist_spawners,
         historical_recruits=train_hist_recruits,
         spawner_max=train_ds.spawner_max, 
-        recruit_max=train_ds.recruit_max
+        recruit_max=train_ds.recruit_max,
+        transform=transform
     )
     
     # 4. Extract last 5 years from validation for test historical context
@@ -224,7 +227,8 @@ def get_dataloaders(batch_size=5, memory_years=5,
         historical_spawners=val_hist_spawners,
         historical_recruits=val_hist_recruits,
         spawner_max=train_ds.spawner_max, 
-        recruit_max=train_ds.recruit_max
+        recruit_max=train_ds.recruit_max,
+        transform=transform
     )
     print("\nData shapes:")
     print(train_hist_spawners.shape, train_hist_recruits.shape)
