@@ -346,8 +346,8 @@ class CrabTransformer(nn.Module):
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
         
         if hasattr(self.decoder, 'conv_out'):
-            print("✓ Applying Bias Initialization Surgery to Decoder (-3.0)")
-            nn.init.constant_(self.decoder.conv_out.bias, -3.0)
+            print("✓ Applying Bias Initialization Surgery to Decoder (-1.0)")
+            nn.init.constant_(self.decoder.conv_out.bias, -1.0) # was -3
         else:
             print("⚠️ WARNING: Could not find 'conv_out' in decoder to apply bias fix.")
         

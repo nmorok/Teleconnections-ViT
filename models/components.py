@@ -505,14 +505,17 @@ class SpatialDecoder(nn.Module):
         self.upsample1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False) # upsample takes increases the size
         #self.conv1 = nn.Conv2d(embed_dim, 64, kernel_size=3, padding=1) # convolution reduces the number of channels. we go from 128 to 64. 
         self.conv1 = nn.Conv2d(embed_dim, 64, kernel_size=3, padding=1, padding_mode='reflect') # can try this if need be.
-        self.bn1 = nn.BatchNorm2d(64)
+        #self.bn1 = nn.BatchNorm2d(64)
+        # trying group norm instead of batch norm for better stability with small batch sizes
+        self.bn1 = nn.GroupNorm(8, 64) # 8 groups of 64 channels
         self.act1 = nn.GELU()
         
         # Stage 2: 20×20 → 40×40
         self.upsample2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
         #self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(64, 32, kernel_size=3, padding=1, padding_mode='reflect')
-        self.bn2 = nn.BatchNorm2d(32)
+        #self.bn2 = nn.BatchNorm2d(32)
+        self.bn2 = nn.GroupNorm(4, 32) # 4 groups of 32 channels
         self.act2 = nn.GELU()
         
         # Stage 3: 40×40 → 50×50
@@ -532,7 +535,8 @@ class SpatialDecoder(nn.Module):
                 nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.BatchNorm2d):
+            #elif isinstance(module, nn.BatchNorm2d):
+            elif isinstance(module, nn.GroupNorm):
                 nn.init.ones_(module.weight)
                 nn.init.zeros_(module.bias)
     
