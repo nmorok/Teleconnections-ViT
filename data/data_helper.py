@@ -6,7 +6,7 @@ class CrabDataset(Dataset):
     def __init__(self, spawner_path, recruit_path, n_years, memory_years = 5,
                  historical_spawners = None,
                  historical_recruits = None,
-                 spawner_max=None, recruit_max=None):
+                 spawner_max=None, recruit_max=None, transform="max"):
         """
         Args:
             spawner_max (float, optional): Force a specific max value for scaling. 
@@ -39,25 +39,32 @@ class CrabDataset(Dataset):
         if self.historical_spawners is not None:
             print(f"  Using {memory_years} years of historical data from previous split")
         
-        # 2. Handle Spawner Max
-        if spawner_max is None:
-            # Case A: Training (Calculate from self)
-            self.spawner_max = np.max(self.spawners) + 1e-6
-            print(f"Computed new Spawner Max: {self.spawner_max:.4f}")
-        else:
-            # Case B: Validation (Use provided value)
-            self.spawner_max = spawner_max
-            print(f"Using provided Spawner Max: {self.spawner_max:.4f}")
+        # 2. Handle Spawner Max or log scale
+        if transform == "max":
+            if spawner_max is None:
+                # Case A: Training (Calculate from self)
+                self.spawner_max = np.max(self.spawners) + 1e-6
+                print(f"Computed new Spawner Max: {self.spawner_max:.4f}")
+            else:
+                # Case B: Validation (Use provided value)
+                self.spawner_max = spawner_max
+                print(f"Using provided Spawner Max: {self.spawner_max:.4f}")
 
-        # 3. Handle Recruit Max
-        if recruit_max is None:
-            # Case A: Training (Calculate from self)
-            self.recruit_max = np.max(self.recruits) + 1e-6
-            print(f"Computed new Recruit Max: {self.recruit_max:.4f}")
-        else:
-            # Case B: Validation (Use provided value)
-            self.recruit_max = recruit_max
-            print(f"Using provided Recruit Max: {self.recruit_max:.4f}")
+            # 3. Handle Recruit Max or log scale
+            if recruit_max is None:
+                # Case A: Training (Calculate from self)
+                self.recruit_max = np.max(self.recruits) + 1e-6
+                print(f"Computed new Recruit Max: {self.recruit_max:.4f}")
+            else:
+                # Case B: Validation (Use provided value)
+                self.recruit_max = recruit_max
+                print(f"Using provided Recruit Max: {self.recruit_max:.4f}")
+        elif transform == "log":
+            print("Applying Log-Scaling: x_scaled = log(1 + x)")
+            self.spawners = np.log1p(self.spawners)
+            self.recruits = np.log1p(self.recruits)
+            self.spawner_max = 1.0 
+            self.recruit_max = 1.0
 
     def __len__(self):
         return len(self.spawners)
