@@ -109,7 +109,8 @@ class CrabTransformer(nn.Module):
         x = x.view(batch_size, self.embed_dim, self.patch_grid_size, self.patch_grid_size) # input [batch, dimensions, n_patches, n_patches] like each pixel has 128 dimensions 
         x = self.decoder(x)  # [batch, channels, n_patches, n_patches] 
 
-        x = torch.sigmoid(x)  # [batch_size, 1, grid_size, grid_size]
+        #x = torch.sigmoid(x)  # [batch_size, 1, grid_size, grid_size]
+        x = torch.softplus(x)  # [batch_size, 1, grid_size, grid_size]
 
 
         if return_attention:
