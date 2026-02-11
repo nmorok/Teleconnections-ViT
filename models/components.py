@@ -118,7 +118,7 @@ class PatchEmbedding(nn.Module):
         self.num_patches = (grid_size // patch_size) ** 2
         
         # Each channel gets its own projection
-        self.embed_dim_per_channel = 12
+        self.embed_dim_per_channel = math.ceil(embed_dim / in_channels)
         self.channel_projections = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(patch_size * patch_size, self.embed_dim_per_channel),
@@ -151,11 +151,11 @@ class PatchEmbedding(nn.Module):
             if mask is not None:
                 if 1 <= c <= 5: # Spawner history
                     # mask[:, 0] applies to lookback-1 (channel 1), etc.
-                    m = mask[:, c-1].view(batch_size, 1, 1) 
+                    m = mask[:, c].view(batch_size, 1, 1) 
                     channel_embed = channel_embed * m
                 elif 6 <= c <= 10: # Recruit history
                     # mask[:, 0] applies to lookback-1 (channel 6), etc.
-                    m = mask[:, c-6].view(batch_size, 1, 1)
+                    m = mask[:, c-5].view(batch_size, 1, 1)
                     channel_embed = channel_embed * m
             channel_embeds.append(channel_embed)
         
@@ -175,10 +175,10 @@ class PositionalEncoding2D(nn.Module):
     Add learned positional embeddings to patches. 
     Each of the 100 patches gets a unique position vector.
     '''
-    def __init__(self, n_patches = 100, embedding_dim=128):
+    def __init__(self, n_patches = 100, embedding_dim=128, scale=0.1):
         super().__init__()
         #Learnable position embeddings
-        self.position_embeddings = nn.Parameter(torch.randn(1, n_patches, embedding_dim) * 0.02) # initialize small random values
+        self.position_embeddings = nn.Parameter(torch.randn(1, n_patches, embedding_dim) * scale) # initialize small random values
 
     def forward(self, x):
         # x: [batch, n_patches, embedding_dim]
@@ -596,3 +596,30 @@ class SpatialDecoder(nn.Module):
         )'''
   
 
+'''def visualize_pos_embeddings(pos_layer):
+    """
+    pos_layer: Your instance of PositionalEncoding2D
+    """
+    # 1. Pull the weights: [1, 100, 128] -> [100, 128]
+    weights = pos_layer.position_embeddings.data.squeeze(0)
+    
+    # 2. Pick a "reference" patch (e.g., index 55, near the center)
+    ref_idx = 55
+    ref_vector = weights[ref_idx].unsqueeze(0) # [1, 128]
+    
+    # 3. Compute similarity between this patch and all 100 patches
+    similarities = F.cosine_similarity(ref_vector, weights, dim=-1) # [100]
+    
+    # 4. Reshape to a 10x10 grid (assuming 100 patches)
+    grid = similarities.reshape(10, 10).detach().cpu().numpy()
+    
+    # 5. Plot it
+    plt.figure(figsize=(6, 5))
+    plt.imshow(grid, cmap='viridis')
+    plt.colorbar(label="Cosine Similarity")
+    plt.title(f"Spatial Relationship of Patch {ref_idx}")
+    plt.show()
+
+# Example usage:
+# pos_layer = PositionalEncoding2D(n_patches=100, embedding_dim=128)
+# visualize_pos_embeddings(pos_layer)'''
