@@ -309,7 +309,7 @@ class MultiHeadAttention(nn.Module):
 
 
 
-    def forward(self, x, return_attention=False):
+    def forward(self, x, temporal_mask=None, return_attention=False):
         """
         Forward pass for multi-head attention.
     
@@ -348,8 +348,14 @@ class MultiHeadAttention(nn.Module):
         # Scale by square root of d_head (for numerical stability)
         scores = scores / math.sqrt(self.d_head)
 
-
         # Apply mask if provided (set masked positions to large negative value)
+        if temporal_mask is not None:
+            # mask shape is [batch, patches]. We need to align it with [batch, heads, patches, patches]
+            # we want to mask the 'keys' (columns) that represent invalid history years
+            temporal_mask = temporal_mask.unsqueeze(1).unsqueeze(2) # [batch, 1, 1, patches]
+
+            # set scores to a very large negative value so softmax(score) becomes 0.0
+            scores = scores.masked_fill(temporal_mask == 0, -1e9)
 
         # Apply softmax to get attention weights
         attention_weights = F.softmax(scores, dim=-1)  # [batch, heads, patches, patches]
