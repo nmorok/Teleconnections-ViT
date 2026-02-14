@@ -384,7 +384,7 @@ Want to train the model on the training data, validate the model on the validati
 9. Initialize the scheduler (OneCycleLR)
    1. It updates the learning rate for every batch, not just once per epoch. This creates a smooth curve for the learning rate, making training much more stable.
    2. Chose OneCycleLR to help the model avoid the identity trap, which is when the model gets stuck predicting the average density. The OnceCycleLR works by starting with a very low learning rate to find the correct direction, then ramps up to a high rate to jump over local minima and finally slows down to fine-tune pixels.
-   3. This is how the scheduler actually works: ...
+   3. OneCycleLR updates the learning rate every batch (not every epoch). It follows a three-phase curve: it starts at max_lr / div_factor (so 5e-4 / 10 = 5e-5), ramps up to max_lr (5e-4) over the first 10% of total steps (pct_start=0.1), then cosine-anneals down to max_lr / (div_factor × final_div_factor) (5e-4 / 1000 = 5e-7) over the remaining 90%. The total number of steps is epochs × steps_per_epoch (and yes, steps_per_epoch = len(train_loader) which is number of batches, not samples). The idea is: start cautious to find the right gradient direction, ramp up to jump over local minima (like the identity trap where the model just predicts the mean), then slow down to fine-tune.
 10. For every input, target pair in the training loader (so this would be for every pair in a batch)
     1.  zero out the gradient
     2.  Forward model pass
