@@ -96,10 +96,10 @@ class CrabTransformer(nn.Module):
         for block in self.transformer_blocks:
             
             if return_attention:
-                x, attn = block(x, temporal_mask=temporal_mask, return_attention=True)  # [batch_size, num_patches, embed_dim], [batch_size, heads, patches, patches]
+                x, attn = block(x, return_attention=True)  # [batch_size, num_patches, embed_dim], [batch_size, heads, patches, patches]
                 attention_maps.append(attn)
             else:
-                x = block(x, temporal_mask=temporal_mask)  # [batch_size, num_patches, embed_dim]
+                x = block(x)  # [batch_size, num_patches, embed_dim]
         
         x = self.norm(x)  # [batch_size, num_patches, embed_dim]
 
