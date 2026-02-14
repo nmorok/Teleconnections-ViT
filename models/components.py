@@ -471,7 +471,7 @@ class TransformerBlock(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
 
-    def forward(self, x, mask=None, return_attention=False):
+    def forward(self, x, temporal_mask=None, return_attention=False):
         """
         Forward pass through transformer block.
     
@@ -489,9 +489,9 @@ class TransformerBlock(nn.Module):
         # apply attention to normalized input, then add back original input
         normed = self.norm1(x)
         if return_attention:
-            attn_output, attn_weights = self.attention(normed, mask, return_attention=True)
+            attn_output, attn_weights = self.attention(normed, temporal_mask, return_attention=True)
         else:
-            attn_output = self.attention(normed, mask)
+            attn_output = self.attention(normed, temporal_mask)
         
         x = x + attn_output
 
