@@ -157,7 +157,7 @@ def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to
     return historical_spawners, historical_recruits
 
 
-def get_dataloaders(batch_size=5, memory_years=5, 
+def get_dataloaders(level='easy', batch_size=5, memory_years=5, 
                    train_years=22, val_years=5, test_years=3, transform="log"):
     """
     Helper function to initialize the split loaders with proper temporal continuity.
@@ -170,17 +170,17 @@ def get_dataloaders(batch_size=5, memory_years=5,
         test_years: Number of years in test set (default 3, years 27-29)
         transform: Whether to apply log transform (default "log")
     """
-    data_dir = "data/dummy/splits/"
+    data_dir = f"data/dummy/splits/{level}/"
     
     # First, determine number of bootstraps from training data
-    train_spawners = np.load(data_dir + "train_spawners.npy")
+    train_spawners = np.load(data_dir + f"train_spawners_{level}.npy")
     n_bootstraps = len(train_spawners) // train_years
     print(f"Detected {n_bootstraps} bootstrap samples")
 
     # 1. Training dataset (no historical data needed)
     train_ds = CrabDataset(
-        data_dir + "train_spawners.npy", 
-        data_dir + "train_recruits.npy",
+        data_dir + f"train_spawners_{level}.npy", 
+        data_dir + f"train_recruits_{level}.npy",
         n_years=train_years,
         memory_years=memory_years,
         historical_spawners=None,
@@ -201,8 +201,8 @@ def get_dataloaders(batch_size=5, memory_years=5,
     
     # 3. Validation dataset (with training history)
     val_ds = CrabDataset(
-        data_dir + "val_spawners.npy", 
-        data_dir + "val_recruits.npy",
+        data_dir + f"val_spawners_{level}.npy", 
+        data_dir + f"val_recruits_{level}.npy",
         n_years=val_years,
         memory_years=memory_years,
         historical_spawners=train_hist_spawners,
@@ -223,8 +223,8 @@ def get_dataloaders(batch_size=5, memory_years=5,
     
     # 5. Test dataset (with validation history)
     test_ds = CrabDataset(
-        data_dir + "test_spawners.npy", 
-        data_dir + "test_recruits.npy",
+        data_dir + f"test_spawners_{level}.npy", 
+        data_dir + f"test_recruits_{level}.npy",
         n_years=test_years,
         memory_years=memory_years,
         historical_spawners=val_hist_spawners,
