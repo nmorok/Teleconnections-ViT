@@ -234,7 +234,8 @@ def create_spatiotemporal_gmrf_data(
     temporal_rho=0.7,
     temporal_sigma=1.0,
     mean_density=50.0,
-    seed=2026
+    seed=2026,
+    transform = True
 ):
     """
     Generate spatiotemporal GMRF data mimicking crab density fields.
@@ -349,6 +350,20 @@ def create_spatiotemporal_gmrf_data(
             idx = b * n_years + t  # Index in flattened output
             data[idx] = spatial_fields[t].reshape(grid_size, grid_size)
     
+    if transform == False:
+        params = {
+        'grid_size': grid_size,
+        'n_years': n_years,
+        'n_bootstraps': n_bootstraps,
+        'n_total_samples': n_total_samples,
+        'spatial_kappa': spatial_kappa,
+        'temporal_rho': temporal_rho,
+        'temporal_sigma': temporal_sigma,
+        'mean_density': mean_density,
+        'spatial_correlation_range_cells': 1.0 / spatial_kappa,
+        'seed': seed
+    }
+        return (data - data.mean()) / data.std(), params
     # -------------------------------------------------------------------------
     # Step 3: Transform to realistic crab density scale
     # -------------------------------------------------------------------------
@@ -363,12 +378,21 @@ def create_spatiotemporal_gmrf_data(
     
     # Apply log-normal-ish transformation to get positive values
     # exp() creates right-skewed distribution (like real crab data)
-    data_transformed = mean_density * np.exp(data_standardized * 1.5)
+    data_transformed = mean_density * np.exp(data_standardized * 2.2)
     
     # 3. Apply the "Zero-Floor" (The Tweedie mass at zero)
     # Adjust the threshold (e.g., 5.0) to get more or fewer zeros
-    data_transformed = data_transformed - 15.0
-    data_transformed[data_transformed < 15.0] = 0
+
+    # after looking at the actual data distribution, a more aggresive threshold is needed. 
+    # the median for both the spawners and recruits is 0 so we want like 60th percentile to be zero.
+    threshold = np.percentile(data_transformed, 60)
+    data_transformed = data_transformed - threshold
+    data_transformed[data_transformed < 0.0] = 0
+    # Final scaling to ensure the MEAN is correct after zeroing out 65% of the data
+    current_mean = data_transformed.mean()
+    print(f"  Mean after zero-floor: {current_mean:.2f} (target: {mean_density:.2f})")
+    if current_mean > 0:
+        data_transformed *= (mean_density / current_mean)
 
     
     # -------------------------------------------------------------------------
@@ -398,6 +422,30 @@ def create_spatiotemporal_gmrf_data(
     return data_transformed, params
 
 
+
+def finalize_density(latent_data, target_mean, target_max, skew=1.35, zero_pct=60):
+    """
+    Converts Gaussian latent data to skewed, zero-inflated crab density.
+    """
+    # 1. Exponential transform (Log-normal tail)
+    # Skew=1.5 keeps Max around 1-5 million. Skew=2.2 pushes it to 100M+.
+    dens = np.exp(latent_data * skew)
+    
+    # 2. Zero-inflation (Clipping)
+    thresh = np.percentile(dens, zero_pct)
+    dens = np.maximum(0, dens - thresh)
+
+   
+    
+    # 3. Final Scale to hit R-summary Mean
+    if dens.mean() > 0:
+        dens = dens * (target_mean / dens.mean())
+    
+    # 4 softcap
+    dens = np.clip(dens, a_min=0, a_max = target_max)
+    return dens
+
+
 def create_spawner_recruit_pairs(
     grid_size=50,
     n_spawner_years=30,
@@ -407,7 +455,9 @@ def create_spawner_recruit_pairs(
     temporal_rho=0.7,
     recruitment_correlation=0.3,
     mean_spawner_density=50.0,
+    max_spawner_density=1179934.0,
     mean_recruit_density=50.0,
+    max_recruit_density=972298.0,
     lag = 3,
     seed=2026
 ):
@@ -460,7 +510,8 @@ def create_spawner_recruit_pairs(
         spatial_kappa=spatial_kappa,
         temporal_rho=temporal_rho,
         mean_density=mean_spawner_density,
-        seed=seed
+        seed=seed,
+        transform = False
     )
     
     # -------------------------------------------------------------------------
@@ -479,7 +530,8 @@ def create_spawner_recruit_pairs(
         spatial_kappa=spatial_kappa,
         temporal_rho=temporal_rho,
         mean_density=mean_recruit_density,
-        seed=seed + 1000 if seed is not None else None  # Different seed
+        seed=seed + 1000 if seed is not None else None,  # Different seed
+        transform = False
     )
     
     # -------------------------------------------------------------------------
@@ -511,25 +563,36 @@ def create_spawner_recruit_pairs(
             
             # Mix formula: R = α×S + √(1-α²)×ε
             # This ensures Corr(R,S) = α
+            # we standardize S and ε to have mean 0 and std 1 before mixing to maintain variance
+            s_val = (spawners[spawner_idx] - spawners[spawner_idx].mean()) / (spawners[spawner_idx].std() + 1e-6)
+            e_val = (recruits_base[recruit_idx] - recruits_base[recruit_idx].mean()) / (recruits_base[recruit_idx].std() + 1e-6)
+
             recruits[recruit_idx] = (
-                recruitment_correlation * spawners[spawner_idx] +
-                np.sqrt(1 - recruitment_correlation**2) * recruits_base[recruit_idx] 
+                recruitment_correlation * s_val +
+                np.sqrt(1 - recruitment_correlation**2) * e_val 
             )
+        
+    # We must re-standardize the mixed recruits. Even though the formula theoretically 
+    # maintains variance, numerical sampling and the early 'base' years can shift it. because of the lag structure. there are different variances
+    # for the first 0-lag years and then lag+ years. 
+    recruits = (recruits - recruits.mean()) / (recruits.std() + 1e-6)
+    spawners = (spawners - spawners.mean()) / (spawners.std() + 1e-6)
+
+    spawners = finalize_density(spawners, target_mean=mean_spawner_density, target_max=max_spawner_density, skew=1.5, zero_pct=60)
+    recruits = finalize_density(recruits, target_mean=mean_recruit_density, target_max=max_recruit_density, skew=1.5, zero_pct=60)
     
     # Verify correlation (check a few samples)
-    print("\nVerifying spawner-recruitment correlation...")
+    print("\nVerifying spawner-recruitment correlation (LAG-AWARE)...")
     correlations = []
-    for b in range(min(10, n_bootstraps)):  # Check first 10 bootstraps
-        for t in range(n_recruit_years):
+    for b in range(min(10, n_bootstraps)):
+        # We only check years where a lag relationship exists (t >= lag)
+        for t in range(lag, n_recruit_years): 
             recruit_idx = b * n_recruit_years + t
-            spawner_idx = b * n_spawner_years + t
+            spawner_idx = b * n_spawner_years + (t - lag) # Corrected Alignment
             
-            corr = np.corrcoef(
-                spawners[spawner_idx].flatten(),
-                recruits[recruit_idx].flatten()
-            )[0, 1]
+            corr = np.corrcoef(spawners[spawner_idx].flatten(), 
+                               recruits[recruit_idx].flatten())[0, 1]
             correlations.append(corr)
-    
     print(f"  Mean correlation: {np.mean(correlations):.3f}")
     print(f"  Std correlation: {np.std(correlations):.3f}")
     print(f"  Expected: {recruitment_correlation:.3f} ✓")
@@ -545,8 +608,6 @@ def create_spawner_recruit_pairs(
         'mean_recruit_density': mean_recruit_density,
         'lag': lag
     }
-
-    print(spawners[:10])
     
     return spawners, recruits, params
 
@@ -680,220 +741,236 @@ def visualize_gmrf_properties(spawners, recruits, params, output_dir="./output")
 
 def main():
     """
-    Main function to generate dummy GMRF data for crab recruitment modeling.
-    
-    This creates data matching your real SPDE pipeline output structure:
-    - Spawners: 30 years (1988-2017) × 100 bootstraps = 3000 samples
-    - Recruits: 30 years (1988-2015) × 100 bootstraps = 3000 samples
-    - Both on 10×10 grid (20km resolution)
+    Final Main function with Log-Space Global Correlation Verification.
     """
-    
     print("="*80)
     print("GMRF DUMMY DATA GENERATOR FOR CRAB RECRUITMENT")
     print("="*80)
     
-    # -------------------------------------------------------------------------
-    # Configuration
-    # -------------------------------------------------------------------------
-    
-    config = {
-        # Spatial grid
-        'grid_size': 50,              # 50×50 = 2500 cells per field
-        
-        # Temporal extent
-        'n_spawner_years': 30,        # 1988-2017
-        'n_recruit_years': 30,        # 1988-2017
-
-        # Bootstrap uncertainty
-        'n_bootstraps': 100,          # Match your SPDE bootstrap count
-        
-        # Spatial correlation
-        'spatial_kappa': 0.3,         # ~60km correlation range at 20km resolution
-        
-        # Temporal correlation  
-        'temporal_rho': 0.7,          # Strong year-to-year persistence
-        
-        # Spawner-recruitment relationship
-        'recruitment_correlation': 0.9,  # Weak-moderate correlation
-        
-        # Density scales
-        'mean_spawner_density': 50.0,    # Mean crabs/km²
-        'mean_recruit_density': 30.0,    # Typically lower than spawners
-
-        'lag': 3,                        # Recruit year corresponds to spawner year - 3
-        # Reproducibility
+    config_easy = {
+        'grid_size': 50,
+        'n_spawner_years': 30,
+        'n_recruit_years': 30,
+        'n_bootstraps': 100,
+        'spatial_kappa': 0.3,
+        'temporal_rho': 0.0,
+        'recruitment_correlation': 0.9, 
+        'mean_spawner_density': 3728.0, 
+        'max_spawner_density': 1179934.0,
+        'mean_recruit_density': 4514.0, 
+        'max_recruit_density': 972298.0,
+        'lag': 0,
         'seed': 2026
     }
     
-    print("\nConfiguration:")
-    for key, value in config.items():
-        print(f"  {key}: {value}")
+    # 1. Generate data
+    spawners_easy, recruits_easy, params_easy = create_spawner_recruit_pairs(**config_easy)
     
-    # -------------------------------------------------------------------------
-    # Generate data
-    # -------------------------------------------------------------------------
+    # 2. Reshape for Lag-Aware Alignment
+    lag = config_easy['lag']
+    n_years = config_easy['n_spawner_years']
+    n_boot = config_easy['n_bootstraps']
     
-    spawners, recruits, params = create_spawner_recruit_pairs(**config)
+    s_cube_easy = spawners_easy.reshape(n_boot, n_years, 50, 50)
+    r_cube_easy = recruits_easy.reshape(n_boot, n_years, 50, 50)
     
-    # -------------------------------------------------------------------------
-    # Save outputs
-    # -------------------------------------------------------------------------
+    # Align: Spawner[t] matched with Recruit[t + lag]
+    if lag > 0:
+        s_aligned = s_cube_easy[:, :-lag, :, :].flatten()
+        r_aligned = r_cube_easy[:, lag:, :, :].flatten()
+    else:
+        s_aligned = s_cube_easy.flatten()
+        r_aligned = r_cube_easy.flatten()
     
+    # --- THE DIAGNOSTIC FIX: Correlation in Log-Space ---
+    # This prevents the 79M max values from ruining the global statistic
+    overall_corr = np.corrcoef(np.log1p(s_aligned), np.log1p(r_aligned))[0, 1]
+
+    # 3. Save outputs
     output_dir = Path("data/dummy/output")
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+    np.save(output_dir / "gmrf_spawners_50x50_easy.npy", spawners_easy)
+    np.save(output_dir / "gmrf_recruits_50x50_easy.npy", recruits_easy)
+    with open(output_dir / "gmrf_params_easy.json", 'w') as f:
+        json.dump(params_easy, f, indent=2)
+
+    # 4. Summary & Verification
     print("\n" + "="*80)
-    print("SAVING OUTPUTS")
+    print("GENERATION SUMMARY (LOG-STABILIZED)")
     print("="*80)
     
-    # Save numpy arrays
-    np.save(output_dir / "gmrf_spawners_50x50.npy", spawners)
-    print(f"Saved: {output_dir / 'gmrf_spawners_50x50.npy'}")
-    print(f"  Shape: {spawners.shape}")
+    s_zeros = 100 * np.mean(spawners_easy == 0)
+    r_zeros = 100 * np.mean(recruits_easy == 0)
     
-    np.save(output_dir / "gmrf_recruits_50x50.npy", recruits)
-    print(f"Saved: {output_dir / 'gmrf_recruits_50x50.npy'}")
-    print(f"  Shape: {recruits.shape}")
-    
-    # Save metadata
-    with open(output_dir / "gmrf_params.json", 'w') as f:
-        json.dump(params, f, indent=2)
-    print(f"Saved: {output_dir / 'gmrf_params.json'}")
+    print(f"Spawners -> Mean: {spawners_easy.mean():.1f}, Max: {spawners_easy.max():.1f}, Zeros: {s_zeros:.1f}%")
+    print(f"Recruits -> Mean: {recruits_easy.mean():.1f}, Max: {recruits_easy.max():.1f}, Zeros: {r_zeros:.1f}%")
+    print(f"Global Log-Lagged S-R Correlation: {overall_corr:.4f}")
 
 
+    if overall_corr > 0.6:
+        print("✅ SUCCESS: Biological signal is preserved and verified!")
+    else:
+        print("⚠️ WARNING: Signal still weak. Verify latency mixing.")
+
+    # 5. Visualizations
+    visualize_gmrf_properties(spawners_easy, recruits_easy, params_easy, output_dir=output_dir)
     
-    # -------------------------------------------------------------------------
-    # Create visualizations
-    # -------------------------------------------------------------------------
+    # Spatial Check Bootstrap 0: Year 0 Spawner vs Year 3 Recruit
+    S_field = spawners_easy[0]   # B0, Y0
+    R_field = recruits_easy[lag]   # B0, Y3
+    spatial_corr = np.corrcoef(np.log1p(S_field.flatten()), np.log1p(R_field.flatten()))[0,1]
     
+    print(f"\n--- SPATIAL CHECK (B0: S_Yr0 vs R_Yr{lag}) ---")
+    print(f"Calculated Spatial Correlation (Log-Space): {spatial_corr:.4f}")
+
+    config_medium = {
+        'grid_size': 50,
+        'n_spawner_years': 30,
+        'n_recruit_years': 30,
+        'n_bootstraps': 100,
+        'spatial_kappa': 0.3,
+        'temporal_rho': 0.7,
+        'recruitment_correlation': 0.9, 
+        'mean_spawner_density': 3728.0, 
+        'max_spawner_density': 1179934.0,
+        'mean_recruit_density': 4514.0, 
+        'max_recruit_density': 972298.0,
+        'lag': 3,
+        'seed': 2026
+    }
+    
+    # 1. Generate data
+    spawners_medium, recruits_medium, params_medium = create_spawner_recruit_pairs(**config_medium)
+    
+    # 2. Reshape for Lag-Aware Alignment
+    lag = config_medium['lag']
+    n_years = config_medium['n_spawner_years']
+    n_boot = config_medium['n_bootstraps']
+    
+    s_cube_medium = spawners_medium.reshape(n_boot, n_years, 50, 50)
+    r_cube_medium = recruits_medium.reshape(n_boot, n_years, 50, 50)
+    
+    # Align: Spawner[t] matched with Recruit[t + lag]
+    s_aligned = s_cube_medium[:, :-lag, :, :].flatten()
+    r_aligned = r_cube_medium[:, lag:, :, :].flatten()
+    
+    # --- THE DIAGNOSTIC FIX: Correlation in Log-Space ---
+    # This prevents the 79M max values from ruining the global statistic
+    overall_corr = np.corrcoef(np.log1p(s_aligned), np.log1p(r_aligned))[0, 1]
+
+    # 3. Save outputs
+    output_dir = Path("data/dummy/output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    np.save(output_dir / "gmrf_spawners_50x50_medium.npy", spawners_medium)
+    np.save(output_dir / "gmrf_recruits_50x50_medium.npy", recruits_medium)
+    with open(output_dir / "gmrf_params_medium.json", 'w') as f:
+        json.dump(params_medium, f, indent=2)
+
+    # 4. Summary & Verification
     print("\n" + "="*80)
-    print("CREATING VISUALIZATIONS")
+    print("GENERATION SUMMARY (LOG-STABILIZED)")
     print("="*80)
     
-    visualize_gmrf_properties(spawners, recruits, params, output_dir=output_dir)
+    s_zeros = 100 * np.mean(spawners_medium == 0)
+    r_zeros = 100 * np.mean(recruits_medium == 0)
     
-    # -------------------------------------------------------------------------
-    # Summary
-    # -------------------------------------------------------------------------
+    print(f"Spawners -> Mean: {spawners_medium.mean():.1f}, Max: {spawners_medium.max():.1f}, Zeros: {s_zeros:.1f}%")
+    print(f"Recruits -> Mean: {recruits_medium.mean():.1f}, Max: {recruits_medium.max():.1f}, Zeros: {r_zeros:.1f}%")
+    print(f"Global Log-Lagged S-R Correlation: {overall_corr:.4f}")
 
-    # Check zeros
-    n_zeros = (spawners == 0).sum()
-    pct_zeros = n_zeros / spawners.size * 100
 
-    print(f"Spawners Zeros: {pct_zeros:.1f}%")
-
-    # Should see 30-70% zeros
-    if 20 <= pct_zeros <= 80:
-        print("✅ Spawners Proper Tweedie distribution!")
+    if overall_corr > 0.6:
+        print("✅ SUCCESS: Biological signal is preserved and verified!")
     else:
-        print("⚠️ Spawners Adjust mean_density or phi parameters")
+        print("⚠️ WARNING: Signal still weak. Verify latency mixing.")
+
+    # 5. Visualizations
+    visualize_gmrf_properties(spawners_medium, recruits_medium, params_medium, output_dir=output_dir)
     
+    # Spatial Check Bootstrap 0: Year 0 Spawner vs Year 3 Recruit
+    S_field = spawners_medium[0]   # B0, Y0
+    R_field = recruits_medium[lag]   # B0, Y3
+    spatial_corr = np.corrcoef(np.log1p(S_field.flatten()), np.log1p(R_field.flatten()))[0,1]
     
-    n_zeros = (recruits == 0).sum()
-    pct_zeros = n_zeros / recruits.size * 100
+    print(f"\n--- SPATIAL CHECK (B0: S_Yr0 vs R_Yr{lag}) ---")
+    print(f"Calculated Spatial Correlation (Log-Space): {spatial_corr:.4f}")
 
-    print(f"Recruits Zeros: {pct_zeros:.1f}%")
 
-    # Should see 30-70% zeros
-    if 20 <= pct_zeros <= 80:
-        print("✅ Recruits Proper Tweedie distribution!")
-    else:
-        print("⚠️ Recruits Adjust mean_density or phi parameters")
-
-    pixel_coord = (25, 25)  # Center pixel
-    # Extract time series for one bootstrap
-    ts = recruits[:30, pixel_coord[0], pixel_coord[1]] 
+    config_hard = {
+        'grid_size': 50,
+        'n_spawner_years': 30,
+        'n_recruit_years': 30,
+        'n_bootstraps': 100,
+        'spatial_kappa': 0.3,
+        'temporal_rho': 0.7,
+        'recruitment_correlation': 0.8, 
+        'mean_spawner_density': 3728.0, 
+        'max_spawner_density': 1179934.0,
+        'mean_recruit_density': 4514.0, 
+        'max_recruit_density': 972298.0,
+        'lag': 5,
+        'seed': 2026
+    }
     
-    # Correlation between Year(t) and Year(t-lag)
-    lag_corr = np.corrcoef(ts[:-config['lag']], ts[config['lag']:])[0, 1]
-    lag1_corr = np.corrcoef(ts[:-1], ts[1:])[0, 1]
-    print(f"Temporal Autocorrelation (Lag {config['lag']}): {lag_corr:.3f}")
+    # 1. Generate data
+    spawners_hard, recruits_hard, params_hard = create_spawner_recruit_pairs(**config_hard)
+    
+    # 2. Reshape for Lag-Aware Alignment
+    lag = config_hard['lag']
+    n_years = config_hard['n_spawner_years']
+    n_boot = config_hard['n_bootstraps']
+    
+    s_cube_hard = spawners_hard.reshape(n_boot, n_years, 50, 50)
+    r_cube_hard = recruits_hard.reshape(n_boot, n_years, 50, 50)
+    
+    # Align: Spawner[t] matched with Recruit[t + lag]
+    s_aligned = s_cube_hard[:, :-lag, :, :].flatten()
+    r_aligned = r_cube_hard[:, lag:, :, :].flatten()
+    
+    # --- THE DIAGNOSTIC FIX: Correlation in Log-Space ---
+    # This prevents the 79M max values from ruining the global statistic
+    overall_corr = np.corrcoef(np.log1p(s_aligned), np.log1p(r_aligned))[0, 1]
 
-    # --- New Validation Checks ---
+    # 3. Save outputs
+    output_dir = Path("data/dummy/output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    np.save(output_dir / "gmrf_spawners_50x50_hard.npy", spawners_hard)
+    np.save(output_dir / "gmrf_recruits_50x50_hard.npy", recruits_hard)
+    with open(output_dir / "gmrf_params_hard.json", 'w') as f:
+        json.dump(params_hard, f, indent=2)
+
+    # 4. Summary & Verification
     print("\n" + "="*80)
-    print("RUNNING TWEEDIE VALIDATION")
+    print("GENERATION SUMMARY (LOG-STABILIZED)")
     print("="*80)
     
-    # 1. Plot Histograms
-    plot_density_histograms(spawners, recruits)
-
-    # 2. Run Mean-Variance Test
-    plt.figure(figsize=(10, 6))
-    p_s = run_tweedie_test(spawners, "Spawners")
-    p_r = run_tweedie_test(recruits, "Recruits")
-    plt.title("Tweedie Power Law Test (Target: 1 < p < 2)")
-    plt.xlabel("log(Mean)")
-    plt.ylabel("log(Variance)")
-    plt.legend()
-    plt.show()
-
-    print(f"Spawner Tweedie Index (p): {p_s:.2f}")
-    print(f"Recruit Tweedie Index (p): {p_r:.2f}")
+    s_zeros = 100 * np.mean(spawners_hard == 0)
+    r_zeros = 100 * np.mean(recruits_hard == 0)
     
-    if 1.1 <= p_s <= 1.9:
-        print("✅ Spawners: Variance scales with Mean like a Tweedie/Compound-Poisson!")
+    print(f"Spawners -> Mean: {spawners_hard.mean():.1f}, Max: {spawners_hard.max():.1f}, Zeros: {s_zeros:.1f}%")
+    print(f"Recruits -> Mean: {recruits_hard.mean():.1f}, Max: {recruits_hard.max():.1f}, Zeros: {r_zeros:.1f}%")
+    print(f"Global Log-Lagged S-R Correlation: {overall_corr:.4f}")
+
+
+    if overall_corr > 0.6:
+        print("✅ SUCCESS: Biological signal is preserved and verified!")
     else:
-        print("⚠️ Spawners: Scaling is non-Tweedie. Consider increasing skew.")
+        print("⚠️ WARNING: Signal still weak. Verify latency mixing.")
+
+    # 5. Visualizations
+    visualize_gmrf_properties(spawners_hard, recruits_hard, params_hard, output_dir=output_dir)
     
-    # Assuming spawners and recruits are matched in time (or correctly lagged) add the lag to the correlation check
-    overall_corr = np.corrcoef(spawners.flatten(), recruits.flatten())[0, 1]
-    print(f"Global S-R Correlation: {overall_corr:.3f}")
+    # Spatial Check Bootstrap 0: Year 0 Spawner vs Year 3 Recruit
+    S_field = spawners_hard[0]   # B0, Y0
+    R_field = recruits_hard[lag]   # B0, Y3
+    spatial_corr = np.corrcoef(np.log1p(S_field.flatten()), np.log1p(R_field.flatten()))[0,1]
     
-    # 1. Get the 2D fields for specific bootstrap and year
-    # Note: Indices assume standard flattening [B0Y0, B0Y1... B1Y0...]
-    bootstrap_idx = 0  # First bootstrap
-    year_idx = 0       # First year (1988 for spawners, 1988 for recruits)
-    n_years = 30 # standard
-    idx = bootstrap_idx * n_years + year_idx
+    print(f"\n--- SPATIAL CHECK (B0: S_Yr0 vs R_Yr{lag}) ---")
+    print(f"Calculated Spatial Correlation (Log-Space): {spatial_corr:.4f}")
     
-    S = spawners[idx]
-    R = recruits[idx]
-    
-    # 2. Calculate Correlation
-    # We flatten them to 1D arrays to compare pixel-to-pixel
-    corr = np.corrcoef(S.flatten(), R.flatten())[0,1]
-    
-    print(f"\n--- DIAGNOSTIC: Bootstrap {bootstrap_idx}, Year {year_idx} ---")
-    print(f"Calculated Spatial Correlation: {corr:.4f}")
-    
-    # 3. Plot
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    
-    # Spawner Field
-    im1 = axes[0].imshow(S, origin='lower', cmap='viridis')
-    axes[0].set_title(f"Spawners (Year {year_idx})")
-    plt.colorbar(im1, ax=axes[0])
-    
-    # Recruit Field
-    im2 = axes[1].imshow(R, origin='lower', cmap='plasma')
-    axes[1].set_title(f"Recruits (Year {year_idx})\nTarget Corr=0.7")
-    plt.colorbar(im2, ax=axes[1])
-    
-    # Scatter Plot (Pixel vs Pixel)
-    axes[2].scatter(S.flatten(), R.flatten(), alpha=0.3, s=2)
-    axes[2].set_xlabel("Spawner Density (Pixel Value)")
-    axes[2].set_ylabel("Recruit Density (Pixel Value)")
-    axes[2].set_title(f"Pixel-wise Correlation: {corr:.2f}")
-    
-    # Add trend line
-    m, b = np.polyfit(S.flatten(), R.flatten(), 1)
-    x_range = np.array([S.min(), S.max()])
-    axes[2].plot(x_range, m*x_range + b, 'r--', label='Trend')
-    axes[2].legend()
-    
-    plt.show()
-        
     print("\n" + "="*80)
     print("GENERATION COMPLETE!")
     print("="*80)
-    print(f"\nOutput directory: {output_dir.absolute()}")
-    print("\nGenerated files:")
-    print("  1. gmrf_spawners_50x50.npy - Spawner density fields")
-    print("  2. gmrf_recruits_50x50.npy - Recruitment density fields")
-    print("  3. gmrf_params.json - Generation parameters")
-    print("  4. gmrf_spatial_patterns.png - Spatial visualization")
-    print("  5. gmrf_temporal_evolution.png - Temporal visualization")
-    print("  6. gmrf_spawner_recruit_correlation.png - Relationship plot")
 
 
 def run_tweedie_test(data, label="Data"):
