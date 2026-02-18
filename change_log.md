@@ -7,4 +7,4 @@ Changes:
 - Added 3 different data configs
 - Removed the temporal mask from the attention because it wasn't adding anything. Attention is patch to patch, whereas the mask is at the channel level, so had more to do with the patch embedding
 - updated the create splits script to handle the three levels of data
--  
+- updated the data helper to support multiple data difficulties. 
