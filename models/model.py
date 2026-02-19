@@ -110,8 +110,8 @@ class CrabTransformer(nn.Module):
         x = self.decoder(x)  # [batch, channels, n_patches, n_patches] 
 
         #x = torch.sigmoid(x)  # [batch_size, 1, grid_size, grid_size]
-        #x = F.softplus(x)  # [batch_size, 1, grid_size, grid_size]
-        x = x # trying no activation and using the exp1m in the training file. 
+        x = F.softplus(x)  # [batch_size, 1, grid_size, grid_size]
+        #x = x # trying no activation and using the exp1m in the training file. 
 
 
         if return_attention:
@@ -337,7 +337,7 @@ class CrabTransformer(nn.Module):
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
                     
-            elif isinstance(module, (nn.LayerNorm, nn.BatchNorm2d)):
+            elif isinstance(module, (nn.LayerNorm, nn.GroupNorm, nn.BatchNorm2d)):
                 # Standard initialization for normalization layers
                 nn.init.ones_(module.weight)
                 nn.init.zeros_(module.bias)
@@ -348,7 +348,7 @@ class CrabTransformer(nn.Module):
         
         if hasattr(self.decoder, 'conv_out'):
             print("✓ Applying Bias Initialization Surgery to Decoder (-1.0)")
-            nn.init.constant_(self.decoder.conv_out.bias, -1.0) # was -3
+            nn.init.constant_(self.decoder.conv_out.bias, 0.0) # was -3
         else:
             print("⚠️ WARNING: Could not find 'conv_out' in decoder to apply bias fix.")
         
