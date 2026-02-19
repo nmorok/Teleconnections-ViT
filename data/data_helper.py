@@ -6,7 +6,8 @@ class CrabDataset(Dataset):
     def __init__(self, spawner_path, recruit_path, n_years, memory_years = 5,
                  historical_spawners = None,
                  historical_recruits = None,
-                 spawner_max=None, recruit_max=None, transform="max"):
+                 spawner_max=None, recruit_max=None, transform="max",
+                 year_offset=0):
         """
         Args:
             spawner_max (float, optional): Force a specific max value for scaling. 
@@ -15,6 +16,8 @@ class CrabDataset(Dataset):
                                            If None, calculates max from current data.
         """
         # 1. Load Data
+        self.transform = transform
+        self.year_offset = year_offset
         self.spawners = np.load(spawner_path).astype(np.float32)
         self.recruits = np.load(recruit_path).astype(np.float32)
         self.n_years = n_years
@@ -76,7 +79,10 @@ class CrabDataset(Dataset):
     def __getitem__(self, idx):
         # Determine which bootstrap and which year
         bootstrap_idx = idx // self.n_years
-        year_idx = idx % self.n_years
+        relative_year_idx = idx % self.n_years
+        year_idx = self.year_offset + relative_year_idx  # Absolute year index in the full timeline
+        
+
     
         
         # Get current spawner and recruit
@@ -187,7 +193,8 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         historical_recruits=None,
         spawner_max=None, 
         recruit_max=None,
-        transform=transform
+        transform=transform,
+        year_offset=0
     )
     
     # 2. Extract last 5 years from training for validation historical context
@@ -209,7 +216,8 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         historical_recruits=train_hist_recruits,
         spawner_max=train_ds.spawner_max, 
         recruit_max=train_ds.recruit_max,
-        transform=transform
+        transform=transform,
+        year_offset=train_years  # Validation years start after training years
     )
     
     # 4. Extract last 5 years from validation for test historical context
@@ -231,7 +239,8 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         historical_recruits=val_hist_recruits,
         spawner_max=train_ds.spawner_max, 
         recruit_max=train_ds.recruit_max,
-        transform=transform
+        transform=transform,
+        year_offset=train_years + val_years  # Test years start after training + validation years
     )
     print("\nData shapes:")
     print(train_hist_spawners.shape, train_hist_recruits.shape)

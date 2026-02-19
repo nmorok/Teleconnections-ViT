@@ -15,4 +15,5 @@ Changes:
 - updated the training file plot scripts to include all three difficulties and loss criterion
 - updated the training file to include loss criterion selection
 - updated the training file's spatial decoder bias to reflect the data better. There was a problem where I was significantly underpredicting values. Mean of like 3 compared to mean of 8 (in log space)
-- 
+- Added a softplus to the end of the decoder in the model.py file. 
+- Updated the data helper to stop it from reseting the year index between train, val, and test. 
