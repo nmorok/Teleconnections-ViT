@@ -100,20 +100,20 @@ class CrabDataset(Dataset):
         # Fill in historical data where available (stay within same bootstrap!)
         for i in range(self.memory_years):
             lookback = i + 1  # 1, 2, 3, 4, 5 years back
-            historical_year = year_idx - lookback
+            target_relative_year = relative_year_idx - lookback
             
-            if historical_year >= 0:
+            if target_relative_year >= 0:
                 # Calculate flat index for same bootstrap, historical year
-                historical_idx = bootstrap_idx * self.n_years + historical_year
+                local_idx = bootstrap_idx * self.n_years + target_relative_year
                 
                 # Get historical data
-                memory_spawners[i] = self.spawners[historical_idx] 
-                memory_recruits[i] = self.recruits[historical_idx]
+                memory_spawners[i] = self.spawners[local_idx] 
+                memory_recruits[i] = self.recruits[local_idx]
                 temporal_mask[i+1] = 1.0  # Mark this year as valid
             elif self.historical_spawners is not None and self.historical_recruits is not None:
                 # Historical is in previous split
                 # historical_year is negative, so -1 means last year of previous split, -2 means second-to-last year, etc.
-                historical_idx = self.memory_years + historical_year # convert to positive index (0 to memory_years-1)
+                historical_idx = self.memory_years + target_relative_year # convert to positive index (0 to memory_years-1)
                 if historical_idx >= 0:
                     memory_spawners[i] = self.historical_spawners[bootstrap_idx, historical_idx]
                     memory_recruits[i] = self.historical_recruits[bootstrap_idx, historical_idx] 
