@@ -99,7 +99,8 @@ if __name__ == "__main__":
         splits = create_temporal_splits(
             data_type='dummy',
             n_years=30,
-            train_years=22,
+            train_years=18,
+            val_years=9,
             test_years=3,
             n_bootstraps=100,
             level = level

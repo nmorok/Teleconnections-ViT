@@ -17,3 +17,10 @@ Changes:
 - updated the training file's spatial decoder bias to reflect the data better. There was a problem where I was significantly underpredicting values. Mean of like 3 compared to mean of 8 (in log space)
 - Added a softplus to the end of the decoder in the model.py file. 
 - Updated the data helper to stop it from reseting the year index between train, val, and test. 
+
+#### 2/20/2026
+Thought:
+- Given that there is an autocorrelation, I think it would be useful to give more to the model. In the sense that if there is a 5 year lag built in, I should give more than 5 years. since the 6th and 7th years have information that might be useful to the model. 
+- Do I even need the recruits from previous year? Like all 5 years, or is it adding noise?
+- What about that memory bank idea. Like all of the previous years and the spawners and recruits. 
+- https://onlinelibrary.wiley.com/doi/full/10.1111/geb.70184 -- this is the paper Maia sent.
