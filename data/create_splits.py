@@ -5,7 +5,7 @@ Split data into train/validation/test sets.
 import numpy as np
 from pathlib import Path
 
-def create_temporal_splits(data_type = 'dummy', n_years = 30, train_years = 22, val_years = 5, test_years = 3, n_bootstraps = 100):
+def create_temporal_splits(data_type = 'dummy', n_years = 30, train_years = 22, val_years = 5, test_years = 3, n_bootstraps = 100, level = 'easy'):
     """
     Create temporal splits for spawner and recruit data.
      
@@ -27,8 +27,8 @@ def create_temporal_splits(data_type = 'dummy', n_years = 30, train_years = 22, 
 
     elif data_type == "dummy":
         data_dir = Path("data/dummy/output")
-        spawners = np.load(data_dir / "gmrf_spawners_50x50.npy")
-        recruits = np.load(data_dir / "gmrf_recruits_50x50.npy")
+        spawners = np.load(data_dir / f"gmrf_spawners_50x50_{level}.npy")
+        recruits = np.load(data_dir / f"gmrf_recruits_50x50_{level}.npy")
 
     n_samples = len(spawners)
 
@@ -76,50 +76,35 @@ def create_temporal_splits(data_type = 'dummy', n_years = 30, train_years = 22, 
     }
 
 
-def save_splits(splits, directory):
+def save_splits(splits, level, directory):
     """Save splits to directory."""
     # Save splits
 
-    splits_dir = Path(directory)
+    splits_dir = Path(directory) / level
     splits_dir.mkdir(parents=True, exist_ok=True)
 
-    np.save(splits_dir / "train_spawners.npy", splits["train_spawn"])
-    np.save(splits_dir / "train_recruits.npy", splits["train_recruit"])
-    np.save(splits_dir / "val_spawners.npy", splits["val_spawn"])
-    np.save(splits_dir / "val_recruits.npy", splits["val_recruit"])
-    np.save(splits_dir / "test_spawners.npy", splits["test_spawn"])
-    np.save(splits_dir / "test_recruits.npy", splits["test_recruit"])
+    np.save(splits_dir / f"train_spawners_{level}.npy", splits["train_spawn"])
+    np.save(splits_dir / f"train_recruits_{level}.npy", splits["train_recruit"])
+    np.save(splits_dir / f"val_spawners_{level}.npy", splits["val_spawn"])
+    np.save(splits_dir / f"val_recruits_{level}.npy", splits["val_recruit"])
+    np.save(splits_dir / f"test_spawners_{level}.npy", splits["test_spawn"])
+    np.save(splits_dir / f"test_recruits_{level}.npy", splits["test_recruit"])
 
     print(f"\nSaved to: {splits_dir}")
     print("✓ Ready for model training!")
 
-def load_splits(directory):
-    """Load splits from directory."""
-    splits_dir = Path(directory)
-
-    train_spawn = np.load(splits_dir / "train_spawners.npy")
-    train_recruit = np.load(splits_dir / "train_recruits.npy")
-    val_spawn = np.load(splits_dir / "val_spawners.npy")
-    val_recruit = np.load(splits_dir / "val_recruits.npy")
-    test_spawn = np.load(splits_dir / "test_spawners.npy")
-    test_recruit = np.load(splits_dir / "test_recruits.npy")
-
-    return {
-        "train_spawn": train_spawn, "train_recruit": train_recruit,
-        "val_spawn": val_spawn, "val_recruit": val_recruit,
-        "test_spawn": test_spawn, "test_recruit": test_recruit
-    }
-
 if __name__ == "__main__":
+    for level in ['easy', 'medium', 'hard']:
     # Create splits for dummy data
-    splits = create_temporal_splits(
-        data_type='dummy',
-        n_years=30,
-        train_years=22,
-        val_years=5,
-        test_years=3,
-        n_bootstraps=100
+        splits = create_temporal_splits(
+            data_type='dummy',
+            n_years=30,
+            train_years=18,
+            val_years=9,
+            test_years=3,
+            n_bootstraps=100,
+            level = level
     )
 
-    # Save splits
-    save_splits(splits, directory="data/dummy/splits")
+        # Save splits
+        save_splits(splits, level, directory="data/dummy/splits")
