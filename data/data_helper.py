@@ -138,7 +138,7 @@ class CrabDataset(Dataset):
         target_tensor = torch.tensor(current_recruit, dtype=torch.float32).unsqueeze(0)  # [1, 50, 50]
         temporal_mask_tensor = torch.tensor(temporal_mask, dtype=torch.float32)  # [5]
         
-        return (input_tensor, target_tensor, temporal_mask_tensor, torch.tensor(year_idx, dtype=torch.long))
+        return (input_tensor, target_tensor, temporal_mask_tensor, torch.tensor(year_idx, dtype=torch.long), torch.tensor(self.mask, dtype=torch.float32))
     
 
 def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to_extract):
