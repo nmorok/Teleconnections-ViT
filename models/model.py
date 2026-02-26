@@ -114,9 +114,8 @@ class CrabTransformer(nn.Module):
         #x = x # trying no activation and using the exp1m in the training file. 
 
         if spatial_mask is not None:
-            # Ensure mask has [Batch, Channels, H, W] shape for safe broadcasting
-            while spatial_mask.dim() < x.dim():
-                spatial_mask = spatial_mask.unsqueeze(0)
+            if spatial_mask.dim() == 3 and x.dim() == 4:
+                spatial_mask = spatial_mask.unsqueeze(1)  # [B, 50, 50] → [B, 1, 50, 50]
             x = x * spatial_mask
 
         if return_attention:

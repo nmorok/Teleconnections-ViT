@@ -36,7 +36,9 @@ class TweedieLoss(nn.Module):
         # Add small epsilon to avoid log(0) and division by zero
         epsilon = 1e-8
         predictions = torch.clamp(predictions, min=epsilon) # clamp forces all values to be at least epsilon
-
+        if mask is not None:
+            if mask.dim() == 3 and predictions.dim() == 4:
+                mask = mask.unsqueeze(1)
         # flatten spatial dimensions to compute loss per pixel
         predictions = predictions.view(-1)
         targets = targets.view(-1)
@@ -92,9 +94,13 @@ class MSELoss_cm(nn.Module):
             loss: Scalar loss value (if reduction='mean' or 'sum')
                   or tensor of losses (if reduction='none')
         """
-        
+        if mask is not None:
+            if mask.dim() == 3 and predictions.dim() == 4:
+                mask = mask.unsqueeze(1)
+                
         predictions = predictions.view(-1)
         targets = targets.view(-1)
+        
         if mask is not None:
             mask = mask.view(-1)
         else:
