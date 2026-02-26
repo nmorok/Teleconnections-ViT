@@ -25,6 +25,9 @@ def load_gridded_data(data_dir=DATA_DIR):
 
     with open(os.path.join(data_dir, 'grid_metadata.json')) as f:
         meta = json.load(f)
+    
+    meta['spawner_years'] = list(range(36))  # 0 to 35
+    meta['recruit_years'] = list(range(36)) 
 
     print(f"Spawners: {spawners.shape}")  # [n_boot, n_years, pad_ny, pad_nx]
     print(f"Recruits: {recruits.shape}")
