@@ -62,7 +62,7 @@ class CrabTransformer(nn.Module):
         self._init_weights()
 
 
-    def forward(self, x, year_indices, temporal_mask=None, return_attention=False):
+    def forward(self, x, year_indices, temporal_mask=None, return_attention=False, spatial_mask=None):
         """
         Args:
             x: Input spawner grids [batch, 1, 50, 50]
@@ -113,6 +113,11 @@ class CrabTransformer(nn.Module):
         x = F.softplus(x)  # [batch_size, 1, grid_size, grid_size]
         #x = x # trying no activation and using the exp1m in the training file. 
 
+        if spatial_mask is not None:
+            # Ensure mask has [Batch, Channels, H, W] shape for safe broadcasting
+            while spatial_mask.dim() < x.dim():
+                spatial_mask = spatial_mask.unsqueeze(0)
+            x = x * spatial_mask
 
         if return_attention:
             return x, attention_maps  # [batch_size, 1, grid_size, grid_size], List of attention maps

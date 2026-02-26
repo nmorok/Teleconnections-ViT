@@ -6,8 +6,8 @@ class CrabDataset(Dataset):
     def __init__(self, spawner_path, recruit_path, n_years, memory_years = 5,
                  historical_spawners = None,
                  historical_recruits = None,
-                 spawner_max=None, recruit_max=None, transform="max",
-                 year_offset=0):
+                 spawner_max=None, recruit_max=None, transform="log",
+                 year_offset=0, mask_path=None):
         """
         Args:
             spawner_max (float, optional): Force a specific max value for scaling. 
@@ -41,6 +41,14 @@ class CrabDataset(Dataset):
         print(f"Loaded {self.n_bootstraps} bootstrap samples, {self.n_years} years each")
         if self.historical_spawners is not None:
             print(f"  Using {memory_years} years of historical data from previous split")
+
+        if mask_path is not None:
+            self.mask = np.load(mask_path).astype(np.float32)
+            # Zero out land/background immediately
+            self.spawners[:, self.mask == 0] = 0.0
+            self.recruits[:, self.mask == 0] = 0.0
+        else:
+            self.mask = np.ones((50, 50), dtype=np.float32)
         
         # 2. Handle Spawner Max or log scale
         if transform == "max":
@@ -164,7 +172,7 @@ def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to
 
 
 def get_dataloaders(level='easy', batch_size=5, memory_years=5, 
-                   train_years=22, val_years=5, test_years=3, transform="log"):
+                   train_years=22, val_years=5, test_years=3, transform="log", data_type='dummy'):
     """
     Helper function to initialize the split loaders with proper temporal continuity.
     
@@ -176,7 +184,14 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         test_years: Number of years in test set (default 3, years 27-29)
         transform: Whether to apply log transform (default "log")
     """
-    data_dir = f"data/dummy/splits/{level}/"
+    if data_type == 'real':
+        data_dir = f"data/real/splits/real/"
+        mask_path = "data/real/output/spatial_mask.npy"
+        level = 'real'
+    elif data_type == 'dummy':
+        data_dir = f"data/dummy/splits/{level}/"
+        mask_path = None
+
     
     # First, determine number of bootstraps from training data
     train_spawners = np.load(data_dir + f"train_spawners_{level}.npy")
@@ -194,7 +209,8 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         spawner_max=None, 
         recruit_max=None,
         transform=transform,
-        year_offset=0
+        year_offset=0,
+        mask_path=mask_path
     )
     
     # 2. Extract last 5 years from training for validation historical context
@@ -217,7 +233,8 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         spawner_max=train_ds.spawner_max, 
         recruit_max=train_ds.recruit_max,
         transform=transform,
-        year_offset=train_years  # Validation years start after training years
+        year_offset=train_years,  # Validation years start after training years
+        mask_path=mask_path
     )
     
     # 4. Extract last 5 years from validation for test historical context
@@ -240,7 +257,8 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         spawner_max=train_ds.spawner_max, 
         recruit_max=train_ds.recruit_max,
         transform=transform,
-        year_offset=train_years + val_years  # Test years start after training + validation years
+        year_offset=train_years + val_years,  # Test years start after training + validation years
+        mask_path=mask_path
     )
     print("\nData shapes:")
     print(train_hist_spawners.shape, train_hist_recruits.shape)
