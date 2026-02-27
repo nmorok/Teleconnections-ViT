@@ -6,18 +6,12 @@ class CrabDataset(Dataset):
     def __init__(self, spawner_path, recruit_path, n_years, memory_years = 5,
                  historical_spawners = None,
                  historical_recruits = None,
-                 spawner_max=None, recruit_max=None, transform="log",
                  year_offset=0, mask_path=None,
-                 year_mask=None, historical_year_mask=None):
+                 year_mask=None, historical_year_mask=None,
+                 include_current_spawner=True):
         """
-        Args:
-            spawner_max (float, optional): Force a specific max value for scaling. 
-                                           If None, calculates max from current data.
-            recruit_max (float, optional): Force a specific max value for scaling.
-                                           If None, calculates max from current data.
         """
         # 1. Load Data
-        self.transform = transform
         self.year_offset = year_offset
         self.spawners = np.load(spawner_path).astype(np.float32)
         self.recruits = np.load(recruit_path).astype(np.float32)
@@ -26,6 +20,7 @@ class CrabDataset(Dataset):
         # Store historical data from previous split
         self.historical_spawners = historical_spawners  # (n_bootstraps, 5, 50, 50) or None
         self.historical_recruits = historical_recruits  # (n_bootstraps, 5, 50, 50) or None
+        self.include_current_spawner = include_current_spawner
 
         total_samples = len(self.spawners)
         assert total_samples % n_years == 0, \
@@ -51,36 +46,11 @@ class CrabDataset(Dataset):
         else:
             self.mask = np.ones((50, 50), dtype=np.float32)
         
-        # 2. Handle Spawner Max or log scale
-        if transform == "max":
-            if spawner_max is None:
-                # Case A: Training (Calculate from self)
-                self.spawner_max = np.max(self.spawners) + 1e-6
-                self.spawners = self.spawners / self.spawner_max 
-                print(f"Computed new Spawner Max: {self.spawner_max:.4f}")
-            else:
-                # Case B: Validation (Use provided value)
-                self.spawner_max = spawner_max
-                print(f"Using provided Spawner Max: {self.spawner_max:.4f}")
-                self.spawners = self.spawners / self.spawner_max 
-
-            # 3. Handle Recruit Max or log scale
-            if recruit_max is None:
-                # Case A: Training (Calculate from self)
-                self.recruit_max = np.max(self.recruits) + 1e-6
-                print(f"Computed new Recruit Max: {self.recruit_max:.4f}")
-                self.recruits = self.recruits / self.recruit_max  
-            else:
-                # Case B: Validation (Use provided value)
-                self.recruit_max = recruit_max
-                print(f"Using provided Recruit Max: {self.recruit_max:.4f}")
-                self.recruits = self.recruits / self.recruit_max  
-        elif transform == "log":
-            print("Applying Log-Scaling: x_scaled = log(1 + x)")
-            self.spawners = np.log1p(self.spawners)
-            self.recruits = np.log1p(self.recruits)
-            self.spawner_max = 1.0 
-            self.recruit_max = 1.0
+        
+        
+        print("Applying Log-Scaling: x_scaled = log(1 + x)")
+        self.spawners = np.log1p(self.spawners)
+        self.recruits = np.log1p(self.recruits)
 
         if year_mask is not None:
             self.year_mask = year_mask  # [n_years], 0 for 2020
@@ -102,12 +72,6 @@ class CrabDataset(Dataset):
         relative_year_idx = idx % self.n_years
         year_idx = self.year_offset + relative_year_idx  # Absolute year index in the full timeline
         
-
-    
-        
-        # Get current spawner and recruit
-        current_spawner = self.spawners[idx]
-        current_recruit = self.recruits[idx] 
         
         # Initialize memory bank arrays with zeros (mask will indicate validity)
         # Using 0.0 instead of -1.0 is cleaner with mask-based handling
@@ -115,7 +79,17 @@ class CrabDataset(Dataset):
         memory_recruits = np.zeros((self.memory_years, 50, 50), dtype=np.float32)
         # Temporal mask: [current_year, -1yr, -2yr, -3yr, -4yr, -5yr]
         temporal_mask = np.zeros(self.memory_years + 1, dtype=np.float32)
-        temporal_mask[0] = 1.0  # Current year is always valid
+
+        # Get current spawner and recruit
+                # Current spawner — zero out if doing one-year-ahead
+        if self.include_current_spawner:
+            current_spawner = self.spawners[idx]
+            temporal_mask[0] = self.year_mask[relative_year_idx]
+        else:
+            current_spawner = np.zeros((50, 50), dtype=np.float32)
+            temporal_mask[0] = 0.0  # mask tells model this channel is invalid
+        
+        current_recruit = self.recruits[idx]
         
         # Fill in historical data where available (stay within same bootstrap!)
         for i in range(self.memory_years):
@@ -151,6 +125,8 @@ class CrabDataset(Dataset):
         
         # NEW: per-sample validity flag (0 for 2020, 1 otherwise)
         valid_year = torch.tensor(self.year_mask[relative_year_idx], dtype=torch.float32)
+        if not self.include_current_spawner and temporal_mask.sum() == 0:
+            valid_year = torch.tensor(0.0, dtype=torch.float32)
 
         return (input_tensor, target_tensor, temporal_mask_tensor, 
                 torch.tensor(year_idx, dtype=torch.long), 
@@ -189,7 +165,7 @@ def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to
 
 def get_dataloaders(level='easy', batch_size=5, memory_years=5,
                     train_years=22, val_years=5, test_years=3, 
-                    transform="log", data_type='dummy'):
+                    data_type='dummy', include_current_spawner=True):
     if data_type == 'real':
         data_dir = f"data/real/splits/real/"
         mask_path = "data/real/output/spatial_mask.npy"
@@ -211,8 +187,9 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         data_dir + f"train_spawners_{level}.npy",
         data_dir + f"train_recruits_{level}.npy",
         n_years=train_years, memory_years=memory_years,
-        transform=transform, year_offset=0, mask_path=mask_path,
+        year_offset=0, mask_path=mask_path,
         year_mask=train_year_mask,
+        include_current_spawner=include_current_spawner
     )
 
     # 2. Historical context for val
@@ -229,10 +206,10 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         n_years=val_years, memory_years=memory_years,
         historical_spawners=train_hist_spawners,
         historical_recruits=train_hist_recruits,
-        spawner_max=train_ds.spawner_max, recruit_max=train_ds.recruit_max,
-        transform=transform, year_offset=train_years, mask_path=mask_path,
+        year_offset=train_years, mask_path=mask_path,
         year_mask=val_year_mask,
         historical_year_mask=train_hist_year_mask,
+        include_current_spawner=include_current_spawner
     )
 
     # 4. Historical context for test
@@ -249,10 +226,10 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
         n_years=test_years, memory_years=memory_years,
         historical_spawners=val_hist_spawners,
         historical_recruits=val_hist_recruits,
-        spawner_max=train_ds.spawner_max, recruit_max=train_ds.recruit_max,
-        transform=transform, year_offset=train_years + val_years, mask_path=mask_path,
+        year_offset=train_years + val_years, mask_path=mask_path,
         year_mask=test_year_mask,
         historical_year_mask=val_hist_year_mask,
+        include_current_spawner=include_current_spawner
     )
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)

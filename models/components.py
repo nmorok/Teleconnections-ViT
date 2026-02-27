@@ -146,9 +146,13 @@ class PatchEmbedding(nn.Module):
             channel_patches = patches[:, :, c, :]  # [B, 100, 25]
             channel_embed = self.channel_projections[c](channel_patches)  # [B, 100, 12]
             # --- APPLY TEMPORAL MASKING ---
-            # Channel 0 is ALWAYS valid (current spawner).
+            # Channel 0 might be valid depending on if we are doing one-year-ahead or not, but channels 1-5 (spawner history) and 6-10 (recruit history) depend on the temporal mask.
             # Channels 1-5 = Spawner History; Channels 6-10 = Recruit History.
             if mask is not None:
+                if c == 0:
+                    # This is the current spawner channel, which may or may not be valid depending on the task (one-year-ahead vs current-year). The mask for this channel is determined by the year_mask at the relative year index, which is handled in the data helper. We will assume that if mask is provided, it includes the validity for this channel as well.
+                    m = mask[:, 0].view(batch_size, 1, 1)  # [B, 1, 1]
+                    channel_embed = channel_embed * m  # Zero out entire channel if not valid
                 if 1 <= c <= 5: # Spawner history
                     # mask[:, 0] applies to lookback-1 (channel 1), etc.
                     m = mask[:, c].view(batch_size, 1, 1) 
