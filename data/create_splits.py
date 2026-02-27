@@ -127,9 +127,9 @@ if __name__ == "__main__":
     
     real_splits = create_temporal_splits(data_type='real', 
                                          n_years=36,
-                                         train_years=24, 
-                                         val_years=8, 
-                                         test_years=4,
+                                         train_years=15, 
+                                         val_years=15, 
+                                         test_years=6,
                                          n_bootstraps=100, 
                                          lag=0)
     save_splits(real_splits, level='real', directory="data/real/splits")
