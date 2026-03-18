@@ -153,7 +153,7 @@ class PatchEmbedding(nn.Module):
                     # This is the current spawner channel, which may or may not be valid depending on the task (one-year-ahead vs current-year). The mask for this channel is determined by the year_mask at the relative year index, which is handled in the data helper. We will assume that if mask is provided, it includes the validity for this channel as well.
                     m = mask[:, 0].view(batch_size, 1, 1)  # [B, 1, 1]
                     channel_embed = channel_embed * m  # Zero out entire channel if not valid
-                if 1 <= c <= 5: # Spawner history
+                elif 1 <= c <= 5: # Spawner history
                     # mask[:, 0] applies to lookback-1 (channel 1), etc.
                     m = mask[:, c].view(batch_size, 1, 1) 
                     channel_embed = channel_embed * m

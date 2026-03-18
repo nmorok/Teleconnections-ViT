@@ -123,7 +123,7 @@ class CrabDataset(Dataset):
         target_tensor = torch.tensor(current_recruit, dtype=torch.float32).unsqueeze(0)
         temporal_mask_tensor = torch.tensor(temporal_mask, dtype=torch.float32)
         
-        # NEW: per-sample validity flag (0 for 2020, 1 otherwise)
+        # per-sample validity flag (0 for 2020, 1 otherwise)
         valid_year = torch.tensor(self.year_mask[relative_year_idx], dtype=torch.float32)
         if not self.include_current_spawner and temporal_mask.sum() == 0:
             valid_year = torch.tensor(0.0, dtype=torch.float32)
@@ -138,8 +138,8 @@ def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to
     Extract the last n_years_to_extract years from a dataset to use as historical context.
     
     Args:
-        spawner_path: Path to spawner data
-        recruit_path: Path to recruit data  
+        spawners: Transformed spawner data of shape (n_bootstraps * n_years_total, 50, 50)
+        recruits: Transformed recruit data of shape (n_bootstraps * n_years_total 
         n_bootstraps: Number of bootstrap samples
         n_years_total: Total years in this dataset
         n_years_to_extract: How many years to extract (e.g., 5)

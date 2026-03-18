@@ -29,7 +29,9 @@ def create_temporal_splits(data_type='dummy', n_years=30, train_years=22,
         # PRE-ALIGN THE LAG
         aligned_spawners = spawners[:, :n_years_total - lag]
         aligned_recruits = recruits[:, lag:]
-        aligned_year_mask = full_year_mask[:n_years_total - lag]  # same slicing
+        recruit_mask = full_year_mask[lag:]  # shift mask to align with recruits
+        spawner_mask = full_year_mask[:n_years_total - lag]  # same slicing for spawners
+        aligned_year_mask = (recruit_mask * spawner_mask).astype(np.float32)  # combined mask for valid years
 
         # Temporal Split
         train_spawn = aligned_spawners[:, :train_years]

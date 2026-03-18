@@ -65,7 +65,7 @@ class CrabTransformer(nn.Module):
     def forward(self, x, year_indices, temporal_mask=None, return_attention=False, spatial_mask=None):
         """
         Args:
-            x: Input spawner grids [batch, 1, 50, 50]
+            x: Input spawner grids [batch, 11, 50, 50]
             year_indices: Year indices [batch]
             temporal_mask: Temporal mask [batch, num_patches] (default: None)
             return_attention: Whether to return attention weights

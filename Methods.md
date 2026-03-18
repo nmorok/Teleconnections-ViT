@@ -74,6 +74,26 @@ Hard:
 - recruits seed: 2026
 - spawners seed: 3026
 
+### process_data.R
+**Idea**
+Sample the EBS bottom trawl data to augment the amount of data we have using SPDE method.
+
+**Steps**
+1. Build a 50 x 35 prediction grid over the EBS region. (values picked arbitrarily) (the remaining 15 rows get padded)
+2. Construct an SPDE mesh from the station locations
+3. Subsample 300 of the 349 stations for each bootstrap
+4. Fit an INLA SPDE model per year on the subsampled stations
+5. Project predictions to the grid
+
+**Parameters**
+- Cellsize: 25 (roughly 23 x 23 km cells)
+- Grid_nx: 50 (number of columns) 
+- Grid_ny: 35 (number of rows)
+- Pad_ny: 50 (extra rows to make square grid)
+- N_bootstraps: 100
+- N_subsample: 300 (number of stations to subsample)
+- cutoff: 30 (for INLA methods)
+
 ### create_splits.py
 **Idea**
 Split the 100 bootstraps of 30 year data into training, validation, and testing.
@@ -83,9 +103,17 @@ Split the 100 bootstraps of 30 year data into training, validation, and testing.
 2. data is formatted by B0Y0, B0Y1, B0Y2 ... 
 
 **Parameters**
-- training years: 22
-- validation years: 5
+
+Dummy data:
+- training years: 18 (or 22 in some runs — check gmrf params file for the run)
+- validation years: 9 (or 5)
 - testing years: 3
+
+Real data (current active pipeline):
+- training years: 24
+- validation years: 8
+- testing years: 4
+- lag: 0 (lag is pre-aligned in create_splits.py; the memory bank handles lookback)
 
 ### data_helper.py
 **Idea**
@@ -96,20 +124,27 @@ Also, transform the data if need be for better model performance.
 **Steps**
 1. load the training data
    1. transform the data if desired
-      1. currently support log transform, and max standardization
+      1. currently support log transform
       2. if transformation = log, take $log(1+density)$
-      3. if transformation = max, calculate the global max across all bootstraps in the training data only. Save that value and use it to transform the validation and testing data as well. Transform via $density/density_{max}$
 2. load the historical data if available
    1. get the data from the previous years (all bootstraps) and add it to the channel data
    2. for the training data where the years are less than the lag, only give as much data is available, and then mask out the missing years using a tenor vector that is 0 for missing years and 1 for valid years, including the current year. The historical year channels that are not valid are set to 0 everywhere and still passed, since the model needs full channel data. The mask will handle telling the model the data is empty/padding instead of all 0s.
    3. to ensure that the historical data is available across validation, and testing sets, there is a bridge function to get the historical data from either the training or validation set. 
 3. Calls the torch dataloader which:
    1. creates a random permutation of indices if shuffle = true.
-   2. takes the first batchsize indices and calls __getitem__ from my function
+   2. takes the first batchsize indices and calls ```__getitem__``` from my function
    3. appends the result to a samples vector. 
    4. returns that vector (batch size long)
    5. continue until all samples have been used.
+4. If we are doing one year ahead prediction (`include_current_spawner=False`), then:
+   1. Channel 0 (current spawner) is replaced with a zero grid.
+   2. The temporal mask at index 0 is set to 0, so the model knows this channel is invalid.
+   3. The model must predict recruitment at year *t* using only spawner and recruit data from years t-1 through t-5.
+   4. A sample is marked invalid (`valid_year = 0`) ONLY if the entire temporal mask sums to 0, meaning no current spawner AND no historical data whatsoever. This only occurs for year 0 of the training set when no bridge data is available. All other samples (even those with partial history) are treated as valid training observations.
+   5. This mode corresponds to a genuine forecasting scenario where the current-year survey has not yet occurred.
+   6. NOTE: The same `valid_year` flag is reused for both the 2020-exclusion logic and the one-year-ahead empty-sample logic. These are distinct reasons for exclusion - <span style="color:red">consider using separate flags in future refactors for clarity</span>.
 
+```
 Training dataset example with idx=1432
 bootstrap_idx = 65, year_idx = 2
 
@@ -123,13 +158,13 @@ for i in range(5):
     
     # i=0: historical_year=1 → EXISTS in current split ✓
     if historical_year >= 0:
-        historical_idx = 65 * 22 + 1 = 1431
+        historical_idx = 65 * 24 + 1 = 1431
         memory_spawners[0] = self.spawners[1431]
         temporal_mask[1] = 1.0  # ✓
     
     # i=1: historical_year=0 → EXISTS in current split ✓
     elif historical_year >= 0:
-        historical_idx = 65 * 22 + 0 = 1430
+        historical_idx = 65 * 24 + 0 = 1430
         memory_spawners[1] = self.spawners[1430]
         temporal_mask[2] = 1.0  # ✓
     
@@ -150,6 +185,7 @@ for i in range(5):
                     ^cur ^-1  ^-2  ^-3  ^-4  ^-5
                      ✓    ✓    ✓    ✗    ✗    ✗
                      Only 3 positions valid (current year + 2 years history)
+```
 
 **Parameters**
 - batch_size: 12
@@ -173,14 +209,14 @@ Wanted to process each channel seperately and then combine at the end because th
    2. unfold along width dimension [B, 11, 10, 50, 5] -> [B, 11, 10, 10, 5, 5] (10: number of patches along width) (5: patch width)
    3. Rearrange dimensions [B, 11, 10, 10, 5, 5] -> [B, 10, 10, 11, 5, 5]
    4. Flatten into sequences [B, 10, 10, 11, 5, 5] -> [B, 100, 11, 25]
-2. Process each channel seperately
+2. Process each channel separately
    1. apply a learned linear transformation to go from dim 25 to dim 128
-      1. Using nn.Linear
+      1. Using nn.Linear 
    2. normalize the vector using LayerNorm -- $LN(x) = \gamma * ((x-\mu) / \sqrt(\sigma^2+\epsilon)) + \beta$, where $\gamma$ and $\beta$ are learnable scale and shift parameters, and $\epsilon$ is a small constant for numerical stability.
    3. apply dropout
-3. each channel gets processed into a 12 embedding dimensionality vector. [B, 100, 25] -> [B, 100, 12]
-4. multiply the channel by the mask (1.0 if valid, 0 if invalid)
-5. concatonate all of the channel embeddings together so now we have [B, 100, 132]
+3. each channel gets processed into a 12 embedding dimensionality vector (math.ceil(128/11) = 12). [B, 100, 25] -> [B, 100, 12]
+4. multiply the channel by the temporal mask (1.0 if valid, 0 if invalid)
+5. concatenate all of the channel embeddings together so now we have [B, 100, 132]
 6. apply one more linear transformation to go from [B, 100, 132] to [B, 100, 128]
 
 **Parameters**
@@ -213,6 +249,7 @@ Add a fixed sinusoidal encoding to represent the year. Unlike learned embeddings
    4. Buffer Storage: Use register_buffer to store this as a constant "lookup table" so you don't waste CPU cycles re-calculating the same waves every batch.
    5. Dynamic Fallback: If a year index exceeds the table, use the same formula to compute the vector on the fly, ensuring the model can extrapolate into the future.
 2. select the temporal signature relating to the year and add it to the input
+
 **Parameters**
 - embed_dim: 128
 - max_years: 30
@@ -221,6 +258,7 @@ Add a fixed sinusoidal encoding to represent the year. Unlike learned embeddings
 #### MultiHeadAttention
 **Idea**
 The guts of the transformer model. Allows different parts of the grid to attend to other parts.
+
 **Steps**
 1. Learned linear projection of the Q, K, V weights onto the data
    1. Using nn.Linear
@@ -235,6 +273,7 @@ The guts of the transformer model. Allows different parts of the grid to attend 
 4. Apply attention weights to values via matrix multiplication
 5. Combine the heads together
 6. Apply an output projection to allow all of the heads to talk to each other
+
 **Parameters**
 - dim_model: 128
 - num_heads: 8
@@ -243,6 +282,7 @@ The guts of the transformer model. Allows different parts of the grid to attend 
 #### FeedForward
 **Idea**
 This allows the model to do expanded thinking and learn from the attention process
+
 **Steps**
 1. linear transformation of the data to expand the dimensionality [B, 100, 128] -> [B, 100, 512]
    1. using nn.Linear
@@ -251,6 +291,7 @@ This allows the model to do expanded thinking and learn from the attention proce
 4. Apply a linear transformation to get back into the dimensionality of our data [B, 100, 512] -> [B, 100, 128]
    1. using nn.Linear
 5. Apply dropout
+
 **Parameters**
 - dim_model: 128
 - d_ff: 512
@@ -259,6 +300,7 @@ This allows the model to do expanded thinking and learn from the attention proce
 #### TransformerBlock
 **Idea**
 Puts together the multihead attention and feedforward process
+
 **Steps**
 1. normalize the data
    1. Using LayerNorm
@@ -266,6 +308,7 @@ Puts together the multihead attention and feedforward process
 3. normalize the output and apply the feedforward module
    1. using layerNorm
 4. add it to the un-normalized output of the attention module
+
 **Parameters**
 - d_model: 128
 - num_heads: 8
@@ -275,6 +318,7 @@ Puts together the multihead attention and feedforward process
 #### SpatialDecoder
 **Idea**
 Transform the embeddings back into our 50 x 50 grid. reverses the encoding process by expanding the spatial dimensions while compressing feature depth. 
+
 **Steps**
 1. upsample the data [B, 128, 10, 10] -> [B, 128, 20, 20] because we have 100 vectors each of 128 and we rearranged them to be in this format.
    1. using nn.Upsample with a scaling factor of 2, bilinear mode, and don't align corners
@@ -299,6 +343,7 @@ Transform the embeddings back into our 50 x 50 grid. reverses the encoding proce
 11. GELU activation
 12. Convvolution layer to reduce the dimensionality [B, 16, 50, 50] -> [B, 1, 50, 50]
     1.  using nn.Conv2D going from 16 -> 1, with a kernel size of 3, padding of 1, and padding mode 'reflection'
+
 **Parameters**
 - embed_dim: 128
 - patch_grid_size: 10
@@ -322,8 +367,9 @@ Put all of the components together to form a whole ViT transformer architecture.
       1. normalization layers are designed to 'reset' the data to a mean of 0 and a sd of 1. by initializing the weights to 1 and biases to 0, we are telling the layer: start by doing a perfect normalization, and only change the scale/shift if you find a reason to during training.
 3. Convert the grid to patch embeddings using the PatchEmbedding script
 4. Add the positional encoding using the PositionalEncoding2D script
-5. Add the temporal encodiing using the TemporalEmbedding script
-6. Apply dropout to the embeddings (what am I dropping out? which parameters? it just zeros out some of the parameters right? which ones?)
+5. Add the temporal encoding using the TemporalEmbedding script
+   - <span style="color:red">KNOWN RISK: Sinusoidal temporal encoding allows the model to use the year index as a direct lookup key rather than learning genuine spawner–recruit relationships. If the model memorizes year-specific patterns during training (effectively learning that "year 3 always has high recruitment"), it will fail to generalize to test years. Monitor for this by checking whether test-year predictions collapse. Removing temporal encoding and replacing with GroupNorm in the decoder is a documented fix if this occurs. If test-year Spearman correlation is high but the model fails on years with indices it hasn't seen (e.g., if you retrain with a gap year held out), that's the smoking gun for year-index memorization.</span>
+6. Apply dropout to the embeddings. Randomly zeros individual elements of the 128-dimensional vectors, independently per element per forward pass. Not the entire patch or entire channels, just scalar positions within the embedding vectors. 
 7. Run the full transformer block using the TransformerBlock script num_layers times
 8. normalize the output of the transformer blocks 
    1. using layernorm
@@ -332,9 +378,14 @@ Put all of the components together to form a whole ViT transformer architecture.
 10. Apply softplus
     1.  To constrain the output to be greater than 0 and uncapped.
     2.  Smooth function
-11. return the predicted 50 x 50 grid
+11. Multiply by the spatial mask to ensure that the cells outside of the EBS region are set to 0.
+12. return the predicted 50 x 50 grid
 
 **Parameters**
+
+Two configurations are trained as a sensitivity analysis (see paper methods §3.9):
+
+Full model (larger):
 - grid_size: 50
 - patch_size: 5
 - in_channels: 11
@@ -343,6 +394,18 @@ Put all of the components together to form a whole ViT transformer architecture.
 - num_layers: 6
 - d_ff: 512
 - dropout: 0.1
+- approx params: ~1.3M
+
+Reduced model (active in notebook):
+- grid_size: 50
+- patch_size: 5
+- in_channels: 11
+- embed_dim: 64
+- num_heads: 4
+- num_layers: 3
+- d_ff: 256
+- dropout: 0.2
+- approx params: ~130K
 
 ### losses.py
 **Idea**
@@ -355,11 +418,14 @@ Since the observed data has inflated zeros, wanted to use Tweedie distribution f
    1. $term1 = -target * prediction ^ {1-p} / (1-p))$
    2. $term2 = prediction^{2-p} / (2-p)$
    3. $loss = term1 + term2$
-4. if reduction = 'mean', return the mean of the loss across all pixels; if reduction = 'sum', return the sum of the loss across all pixels; if reduction = None, return the loss for each pixel seperately.
+   4. IMPORTANT: The Tweedie loss operates on the ORIGINAL (non-log) density scale. In the training loop, both `outputs` and `targets` are back-transformed via `torch.expm1()` before being passed to TweedieLoss. The MSE loss, by contrast, operates on the log-transformed scale directly.
+4. Calculate MSE loss normally (on log scale)
+   1. For MSE: a lognormal bias correction factor of exp(σ²/2) is computed from training residuals and applied at evaluation time to correct for Jensen's inequality.
+5. Multiply by the spatial mask to ensure we only count valid errors
+6. return the mean of all of the errors
 
 **Parameters**
 - power: 1.5
-- reduction: 'mean'
 
 ### train.ipynb
 **Idea**
@@ -380,12 +446,26 @@ Want to train the model on the training data, validate the model on the validati
    1. This is what actually tunes the model parameters.
    2. Chose AdamW because of the capabilities of adaptive learning rates. AdamW allows for different layers (embeddings, attention, decoder) to learn at different speeds. AdamW gives each parameter its own 'speedomoter' adjusting the learning rate individually.
    3. The W in AdamW stands for decoupled weight decay, and assists in regularization.
-   4. This is how AdamW works: ...
-9. Initialize the scheduler (OneCycleLR)
+   4. AdamW maintains two running statistics for each parameter: a first moment 
+   estimate (the exponential moving average of past gradients, analogous to 
+   momentum) and a second moment estimate (the exponential moving average of 
+   past squared gradients, analogous to a per-parameter learning rate scale). 
+   At each update step, the gradient is divided by the square root of the 
+   second moment, which automatically shrinks the effective learning rate for 
+   parameters that have historically received large gradients, and enlarges it 
+   for parameters that have received small or infrequent gradients. This allows 
+   attention layers, which accumulate large gradient signals from many patches, 
+   to take smaller cautious steps, while the decoder's final output convolution, which receives sparse gradients early in training, can take larger steps. 
+   The "W" distinguishes AdamW from standard Adam: rather than folding weight 
+   decay into the gradient update (which distorts the adaptive scaling), AdamW 
+   applies weight decay as a direct multiplicative shrinkage to the parameter 
+   values after the gradient step, equivalent to true L2 regularization.
+1. Initialize the scheduler (OneCycleLR)
    1. It updates the learning rate for every batch, not just once per epoch. This creates a smooth curve for the learning rate, making training much more stable.
    2. Chose OneCycleLR to help the model avoid the identity trap, which is when the model gets stuck predicting the average density. The OnceCycleLR works by starting with a very low learning rate to find the correct direction, then ramps up to a high rate to jump over local minima and finally slows down to fine-tune pixels.
-   3. OneCycleLR updates the learning rate every batch (not every epoch). It follows a three-phase curve: it starts at max_lr / div_factor (so 5e-4 / 10 = 5e-5), ramps up to max_lr (5e-4) over the first 10% of total steps (pct_start=0.1), then cosine-anneals down to max_lr / (div_factor × final_div_factor) (5e-4 / 1000 = 5e-7) over the remaining 90%. The total number of steps is epochs × steps_per_epoch (and yes, steps_per_epoch = len(train_loader) which is number of batches, not samples). The idea is: start cautious to find the right gradient direction, ramp up to jump over local minima (like the identity trap where the model just predicts the mean), then slow down to fine-tune.
-10. For every input, target pair in the training loader (so this would be for every pair in a batch)
+   3. OneCycleLR updates the learning rate every batch (not every epoch). It follows a three-phase curve: it starts at max_lr / div_factor (so 3e-4 / 25 ≈ 1.2e-5), ramps up to max_lr (3e-4) over the first 30% of total steps (pct_start=0.3), then cosine-anneals down to max_lr / final_div_factor (3e-4 / 1000 = 3e-7) over the remaining 70%. The total number of steps is epochs × steps_per_epoch (and yes, steps_per_epoch = len(train_loader) which is number of batches, not samples).
+   4. <span style="color:red">KNOWN PROBLEM: OneCycleLR precomputes the total number of steps from (epochs × steps_per_epoch) at initialization. If early stopping fires before all epochs complete, the scheduler has already planned a learning rate trajectory for the full run — it won't gracefully anneal down to a low final rate. This means the saved best model may have been checkpointed at a relatively high mid-cycle learning rate. A ReduceLROnPlateau scheduler would avoid this issue. Consider switching for future runs. </span>
+2.  For every input, target pair in the training loader (so this would be for every pair in a batch)
     1.  zero out the gradient
     2.  Forward model pass
     3.  Compute the loss
@@ -393,28 +473,35 @@ Want to train the model on the training data, validate the model on the validati
     5.  clip the gradients to avoid exploding gradients
     6.  optimize the weights
     7.  run the scheduler # what does this do?
-11. compute the average training loss across all batches
-12. change the model into evaluation mode (doesn't compute gradients)
-13. for every input, target pair in the validation loader (every batch)
+3.  compute the average training loss across all batches
+4.  change the model into evaluation mode (doesn't compute gradients)
+5.  for every input, target pair in the validation loader (every batch)
     1.  Forward model pass
     2.  Compute the loss
-14. compute the average validation loss across all batches
-15. save the learning rate, the training loss, the validation loss
-16. save the model if the validation error is less than the current model's validation error
-17. increase patience counter if no improvement has occured
-18. Once all epochs have run or we stopped from earlystopping, load the best model
-19. evaluate the model on the test data. 
-20. plot the training curves
+6.  compute the average validation loss across all batches
+7.  calculate the bias of the data using the validation data
+8.  save the learning rate, the training loss, the validation loss
+9.  save the model if the validation error is less than the current model's validation error
+10. increase patience counter if no improvement has occured
+11. Once all epochs have run or we stopped from earlystopping, load the best model
+12. evaluate the model on the test data. 
+13. plot the training curves
 
 **Parameters**
 
-data:
+dummy data:
 - batch_size: 8
 - memory_years: 5
 - train_years: 22
 - val_years: 5
 - test_years: 3
-- transformation: 'log'
+
+real data:
+- batch_size: 8
+- memory_years: 5
+- train_years: 24
+- val_years: 8
+- test_years: 4
 
 model:
 - grid_size: 50
@@ -428,33 +515,177 @@ model:
 
 loss:
 - power: 1.5
-- reduction: 'mean'
 
 optimizer:
 - learning rate: 1e-4
 - weight decay: 1e-4
 
 scheduler:
-- max learning rate: 5e-4
-- epochs: 50
-- steps_per_epoch: len(train_loader) # I think this might be batches?
-- pct_start: 0.1
+- max learning rate: 3e-4
+- epochs: 15
+- steps_per_epoch: len(train_loader) # number of batches per epoch, NOT number of samples
+- pct_start: 0.3 # 30% warmup (NOT 10% as in some earlier runs)
 - anneal_strategy: 'cos'
-- div_factor: 10 # inital_lr = max_lr / 10
-- final_div_factor: 100 # final_lr = max_lr / 100
+- div_factor: 25 # initial_lr = max_lr / 25 ≈ 1.2e-5
+- final_div_factor: 1000 # final_lr = max_lr / 1000 = 3e-7
 
 epochs:
-- epochs: 50
-- early_stop_patience: 10
+- epochs: 15
+- early_stop_patience: 20
 
 gradient clipping: 
 - max: 1.0
 
 
+### run_batch_evaluation
+**Idea** 
+After training, run the best saved model checkpoint against all three data splits (train, val, test) and compute a comprehensive suite of spatial prediction metrics for every bootstrap replicate and year. Also visualize channel importance and attention maps.
 
+**Steps**
+1. Load the saved checkpoint for a given (level, criterion) combination from Google Drive
+2. Load the lognormal bias correction factor from the training history JSON (if MSE loss was used; default 1.0 for Tweedie)
+3. Initialize data loaders using `get_dataloaders()` with the same split sizes used during training
+4. Plot channel importance
+   1. For each of the 11 input channels, extract the corresponding `nn.Linear` layer (index 0 of the `nn.Sequential`) from `model.patch_embed.channel_projections`
+   2. Compute the mean absolute weight magnitude: `weight.abs().mean()`
+   3. Normalize all 11 values to [0, 1] so channels can be compared on a relative scale
+   4. Bar plot of normalized importance, with Channel 0 (current spawner) highlighted in red
+   5. Save to `analysis/batch_evaluation/channel_importance.png`
+5. Run inference across all splits (train, val, test), collecting per-sample records
+   1. For each batch, run a forward pass with `return_attention=True` to simultaneously collect predictions and attention maps
+   2. Back-transform predictions and targets from log space to original density scale using `expm1()`; apply bias correction factor to predictions
+   3. Skip any sample where `valid_year == 0` (i.e., 2020)
+   4. For each valid sample, compute the full metric suite (see Parameters) on the flattened, spatially-masked valid cells
+   5. Pre-zero cells below a threshold of 14.23 (the smallest observed non-zero density) before computing zero-classification metrics, matching the treatment used in the R-based baseline comparisons
+6. For each phase (TRAIN/VAL/TEST), plot one attention map from the first un-plotted year for visual inspection
+7. Aggregate records into a summary DataFrame with columns: year, bootstrap, phase, and all metrics
+8. Print and save summary statistics (mean ± SD per phase) and the full per-replicate table
+
+**Metrics computed per sample (spatial field)**
+- Spearman rank correlation (distribution-free, robust to scale differences)
+- Pearson correlation
+- Mean Absolute Error (MAE)
+- Total observed vs. predicted abundance (summed over valid cells)
+- Percentage abundance error: `(pred_total - obs_total) / obs_total × 100`
+- RMSE (total), RMSE unbiased (pattern component only after removing mean bias), bias, and the percentage of total RMSE attributable to systematic bias vs. spatial pattern error
+- Zero-cell classification: Precision, Recall, and F1 for correctly identifying zero-density cells (cells below threshold 14.23)
+- Top-10% spatial accuracy: Jaccard overlap between the top 10% of cells by observed density vs. predicted density
+- Quantile bin error: mean absolute difference in density quantile bin assignment between observed and predicted
+- Skill scores: MSE-based and MAE-based skill relative to a climatological mean baseline (positive = better than always predicting the mean)
+
+**Parameters**
+- levels: ['easy', 'medium', 'hard'] for dummy; ['real'] for real data
+- criteria: ['MSE', 'Tweedie']
+- data_type: 'dummy' or 'real'
+- zero_threshold: 14.23 (smallest observed non-zero density value)
+- top_k_fraction: 0.1 (top 10% of cells for spatial accuracy)
+- n_quantile_bins: 10
+
+
+### data_comparison_plot
+**Idea**
+Visualize the raw observed spawner and recruit abundance time series across all 100 bootstrap replicates, before any model is involved. This is a data quality and structure check: it confirms the data pipeline is working, shows the bootstrap uncertainty envelope around each year's total abundance, and makes the spawner–recruit relationship (or lack thereof) visually apparent across the time series. Panels are produced for each difficulty level (easy, medium, hard) or for real data.
+
+**Steps**
+1. Initialize data loaders for each level at batch size 1 (so every sample is processed individually)
+2. Loop through all three loaders (train, val, test) in sequence to collect the complete time series in chronological order
+3. For each batch:
+   1. Back-transform inputs (spawner channel 0) and targets (recruits) from log space via `expm1()`
+   2. Sum over valid spatial cells only (using the spatial mask for real data; all cells for dummy data) to get a scalar total abundance per bootstrap-year sample
+4. Stack results into a (n_bootstraps × n_years) matrix
+5. Compute the 5th, 50th (median), and 95th percentiles across bootstraps for each year
+6. Plot for each level:
+   1. Spawner median time series (dashed green line) with 5–95% bootstrap envelope (shaded)
+   2. Recruit median time series (black line) with 5–95% bootstrap envelope (shaded)
+   3. Vertical dashed lines and shaded background regions marking train/val/test boundaries
+7. Save as `analysis/batch_evaluation/data_comparison_panel_{data_type}.png`
+
+**Parameters**
+- levels: ['easy', 'medium', 'hard'] or ['real']
+- num_reps: 100 (number of bootstrap replicates)
+- percentiles: [5, 50, 95]
+- data_type: 'dummy' or 'real'
+
+
+### integrated_gradients
+**Idea** 
+Use Integrated Gradients (IG) to attribute each model prediction back to specific input pixels and channels. IG is a post-hoc interpretability method that answers: "Which pixels in which input channels, and to what degree, caused the model to predict what it predicted for this year?" It satisfies the *completeness axiom*, meaning the sum of all pixel attributions equals exactly the difference between the model's output for the actual input and a chosen reference (baseline) input. This makes it more interpretable than simpler saliency methods like raw gradients. For a teleconnection analysis, IG maps allow us to identify which historical spawner or recruit fields, and which spatial regions, are driving recruitment predictions.
+
+**Steps**
+1. Compute a baseline input
+   1. Average the input tensor across all valid (non-2020) training samples to produce a mean [1, 11, 50, 50] field
+   2. This baseline represents an "average year" — the reference against which attribution is measured. A pixel with high positive attribution means the input was above the baseline at that location in a way that pushed the prediction up.
+2. Organize all samples by year index, grouping all 100 bootstrap replicates under each year key. Skip 2020 samples.
+3. For each year, run IG across all 100 bootstrap replicates and average
+   1. **Core IG computation** (for a single sample):
+      1. Compute the delta: $\delta = x_{\text{actual}} - x_{\text{baseline}}$
+      2. Construct $n_{\text{steps}} = 50$ interpolated inputs along the straight-line path from baseline to actual: $x_\alpha = x_{\text{baseline}} + \alpha \cdot \delta$ for $\alpha \in \{0/50, 1/50, \ldots, 49/50\}$
+      3. For each interpolated input, run a forward pass and compute the scalar output (sum of predicted density over valid spatial cells), then call `backward()` to get gradients with respect to the input
+      4. Accumulate gradients across all steps: $\bar{g} = \frac{1}{n_{\text{steps}}} \sum_\alpha \nabla_x f(x_\alpha)$
+      5. Multiply by delta: $\text{IG} = \bar{g} \cdot \delta$, giving a [11, 50, 50] attribution map
+   2. Average the attribution maps and mean input fields across all 100 bootstraps to produce per-year summary maps
+4. Visualize per-year panels
+   1. Top rows: mean input value for each of the 11 channels (in log space) at this year
+   2. Bottom rows: IG attribution map for each channel — warm colours indicate pixels whose above-baseline values pushed recruitment predictions up; cool colours indicate the opposite
+   3. An additional aggregated attribution panel (sum of absolute attribution across all channels) highlights the most influential spatial regions regardless of which channel they came from
+5. Save all per-year panels to `analysis/attribution/`
+
+**Parameters**
+- n_steps: 50 (number of interpolation steps along the IG path — more steps = more accurate but slower)
+- output_fn: sum of predicted density over valid spatial cells (using spatial mask)
+- baseline: mean valid training input [1, 11, 50, 50]
+- channel_names: ['Spawner (t)', 'Spawner (t-1)', ..., 'Recruit (t-5)']
+
+
+### generate_report
+**Idea**
+Produce a standardized, self-contained multi-page PDF report for each (level, criterion) model run, consolidating all evaluation outputs into a single document for comparison across runs. Each report is written to `reports/` in Google Drive.
+
+**Steps**
+1. Load the best checkpoint and training history JSON for the specified (level, criterion) combination
+2. Initialize data loaders with the same split parameters used during training
+3. Run inference across all splits, collecting per-sample predictions and observations
+4. Assemble the following pages into a multi-page PDF using `matplotlib.backends.backend_pdf.PdfPages`:
+
+   **Page 1 — Title and Training Config Summary**
+   - Run identifier (level, criterion, timestamp)
+   - Key hyperparameters: model size, batch size, optimizer settings, scheduler settings, total trainable parameters
+   - Final training, validation, and test loss values
+
+   **Page 2 — Training Curves**
+   - Left panel: training loss and validation loss vs. epoch, with vertical line at the best epoch
+   - Right panel: learning rate schedule vs. epoch (log scale), showing the OneCycleLR warmup and annealing phases
+
+   **Page 3 — Channel Importance**
+   - Bar chart of normalized mean absolute weight magnitudes from each channel's projection layer (same as `run_batch_evaluation`), providing a proxy for which temporal lags the model weighted most heavily
+
+   **Page 4 — Abundance and Recruitment Deviations**
+   - Time series of total observed vs. predicted recruitment abundance (median and 5–95% bootstrap envelope) across all years
+   - Train/val/test regions shaded for context
+   - Percentage error per year overlaid
+
+   **Page 5 — Spatial Trajectory**
+   - Grid of 50 × 50 spatial maps across all years for the first bootstrap replicate
+   - Three rows per year: observed recruits, predicted recruits, signed residual (predicted − observed)
+   - Fixed colour limits in log space (vmax = 8.0) to prevent extreme hotspot cells from collapsing the colormap
+
+   **Page 6 — Attention Maps**
+   - One representative attention map per phase (train, val, test), averaged across heads and converted to the 10 × 10 patch grid
+   - Shows which spatial patches the model attended most strongly to when making predictions
+
+   **Page 7 — Summary Statistics Table**
+   - Mean ± SD for each metric (Spearman, Pearson, MAE, Skill Score, Zero F1, etc.) broken down by phase (TRAIN / VAL / TEST)
+
+   **Page 8 — Detailed Metrics Table**
+   - Full per-bootstrap, per-year metric table including RMSE decomposition (bias component vs. pattern component), zero-classification precision/recall/F1, top-k spatial accuracy, and quantile bin error
+
+**Parameters**
+- report pages: 8
+- spatial color limits: vmin=0, vmax=8.0 (log1p scale)
+- zero_threshold: 14.23
+- output format: multi-page PDF saved to `reports/CrabTransformer_report_{level}_{criterion}.pdf`
 
 
 
 #### to-dos:
-- Add 2 more in_channels representing lat and lon. Ideally would also add cold pool, but we won't have that for future predictions, unless we gave it summer (off-season) cold pool or something like that. 
-- Add a spatial mask for when we actually use the real data. 
+- Add embeddings representing lat and lon. Ideally would also add cold pool, we can add it for the one-year-ahead-lagged prediction mode
