@@ -562,8 +562,57 @@ station_locations_sf_named <- station_locations_sf %>%
 test <- run_gridding(
   spawner_sf, recruit_sf, station_locations_sf_named,
  survey_domain, sf_maps,
- n_bootstraps = 5, n_subsample = 300
+ n_bootstraps = 100, n_subsample = 300
 )
+
+test2 <- test
+
+test2
+
+all_years <- 1988:2023  # full 36-year sequence
+year_2020_idx <- which(all_years == 2020)  # = 33 in R (1-indexed)
+
+# Create new arrays with room for 2020
+n_boot <- dim(test$spawner$data)[1]
+n_years_new <- 36
+spawner_grids_new <- array(0, dim = c(n_boot, n_years_new, 50, 50))
+recruit_grids_new <- array(0, dim = c(n_boot, n_years_new, 50, 50))
+
+# Fill in everything before 2020 (indices 1:32 = years 1988-2019)
+spawner_grids_new[, 1:(year_2020_idx - 1), , ] <- test$spawner$data[, 1:(year_2020_idx - 1), , ]
+recruit_grids_new[, 1:(year_2020_idx - 1), , ] <- test$recruit$data[, 1:(year_2020_idx - 1), , ]
+
+# Index 33 stays as zeros (2020)
+
+# Fill in everything after 2020 (indices 34:36 = years 2021-2023)
+spawner_grids_new[, (year_2020_idx + 1):n_years_new, , ] <- test$spawner$data[, year_2020_idx:35, , ]
+recruit_grids_new[, (year_2020_idx + 1):n_years_new, , ] <- test$recruit$data[, year_2020_idx:35, , ]
+
+# Save a year mask: 1 for valid, 0 for 2020
+year_mask <- rep(1, n_years_new)
+year_mask[year_2020_idx] <- 0
+
+saveRDS(spawner_grids_new, file.path(OUTPUT_DIR, "gridded_spawners.rds"))
+saveRDS(recruit_grids_new, file.path(OUTPUT_DIR, "gridded_recruits.rds"))
+saveRDS(mask, file.path(OUTPUT_DIR, "spatial_mask.rds"))
+saveRDS(year_mask, file.path(OUTPUT_DIR, "year_mask.rds"))
+saveRDS(1988:2023, file.path(OUTPUT_DIR, "years.rds"))
+
+if (requireNamespace("reticulate", quietly = TRUE)) {
+  np <- reticulate::import("numpy")
+  np$save(file.path(OUTPUT_DIR, "gridded_spawners.npy"), spawner_grids_new)
+  np$save(file.path(OUTPUT_DIR, "gridded_recruits.npy"), recruit_grids_new)
+  np$save(file.path(OUTPUT_DIR, "spatial_mask.npy"), mask)
+  np$save(file.path(OUTPUT_DIR, "year_mask.npy"), as.integer(year_mask))
+  np$save(file.path(OUTPUT_DIR, "years.npy"), as.integer(1988:2023))
+  cat("Saved .npy files\n")
+}
+
+
+
+
+
+
 mask <- fill_matrix(rep(1, test$grid_info$n_valid), test$grid_info)
 test_field <- test_result$spawner$data[1, 15, , ]  # bootstrap 1, year 15, [50, 50]
 write.csv(test_field, file.path(OUTPUT_DIR,"test_spawner_yr15.csv"), row.names = FALSE)
