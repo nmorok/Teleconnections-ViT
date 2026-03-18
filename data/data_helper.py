@@ -3,9 +3,10 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
 class CrabDataset(Dataset):
-    def __init__(self, spawner_path, recruit_path, n_years, memory_years = 5,
+    def __init__(self, spawner_path, recruit_path, temp_path=None, n_years=30, memory_years = 5,
                  historical_spawners = None,
                  historical_recruits = None,
+                 historical_temps = None,
                  year_offset=0, mask_path=None,
                  year_mask=None, historical_year_mask=None,
                  include_current_spawner=True):
@@ -20,7 +21,14 @@ class CrabDataset(Dataset):
         # Store historical data from previous split
         self.historical_spawners = historical_spawners  # (n_bootstraps, 5, 50, 50) or None
         self.historical_recruits = historical_recruits  # (n_bootstraps, 5, 50, 50) or None
+        self.historical_temps = historical_temps  # (n_bootstraps, 5, 50, 50) or None
         self.include_current_spawner = include_current_spawner
+
+        # Load temp if provided (real data only)
+        if temp_path is not None:
+            self.temps = np.load(temp_path).astype(np.float32)
+        else:
+            self.temps = None
 
         total_samples = len(self.spawners)
         assert total_samples % n_years == 0, \
@@ -48,9 +56,10 @@ class CrabDataset(Dataset):
         
         
         
-        print("Applying Log-Scaling: x_scaled = log(1 + x)")
+        print("Applying Log-Scaling to Spawners/Recruits ONLY.")
         self.spawners = np.log1p(self.spawners)
         self.recruits = np.log1p(self.recruits)
+        # We explicitly DO NOT log-scale temperatures because negative temps exist
 
         if year_mask is not None:
             self.year_mask = year_mask  # [n_years], 0 for 2020
@@ -77,6 +86,7 @@ class CrabDataset(Dataset):
         # Using 0.0 instead of -1.0 is cleaner with mask-based handling
         memory_spawners = np.zeros((self.memory_years, 50, 50), dtype=np.float32)
         memory_recruits = np.zeros((self.memory_years, 50, 50), dtype=np.float32)
+        memory_temps = np.zeros((self.memory_years, 50, 50), dtype=np.float32)
         # Temporal mask: [current_year, -1yr, -2yr, -3yr, -4yr, -5yr]
         temporal_mask = np.zeros(self.memory_years + 1, dtype=np.float32)
 
@@ -114,10 +124,20 @@ class CrabDataset(Dataset):
                         memory_recruits[i] = self.historical_recruits[bootstrap_idx, historical_idx]
                         temporal_mask[i+1] = 1.0
 
+        # Handle the new temperature channel
+        if self.temps is not None:
+            current_temp = self.temps[idx]
+            if self.year_mask[relative_year_idx] == 0.0:
+                 current_temp = np.zeros_like(current_temp)
+        else:
+            current_temp = np.zeros((50, 50), dtype=np.float32)
+        
         input_tensor = torch.cat([
             torch.tensor(current_spawner, dtype=torch.float32).unsqueeze(0),
             torch.tensor(memory_spawners, dtype=torch.float32),
-            torch.tensor(memory_recruits, dtype=torch.float32)
+            torch.tensor(memory_recruits, dtype=torch.float32),
+            torch.tensor(current_temp, dtype=torch.float32).unsqueeze(0),
+            torch.tensor(memory_temps, dtype=torch.float32)
         ], dim=0)
 
         target_tensor = torch.tensor(current_recruit, dtype=torch.float32).unsqueeze(0)
@@ -133,7 +153,7 @@ class CrabDataset(Dataset):
                 torch.tensor(self.mask, dtype=torch.float32),
                 valid_year)
 
-def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to_extract):
+def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to_extract, temps=None):
     """
     Extract the last n_years_to_extract years from a dataset to use as historical context.
     
@@ -151,6 +171,7 @@ def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to
     
     historical_spawners = np.zeros((n_bootstraps, n_years_to_extract, 50, 50), dtype=np.float32)
     historical_recruits = np.zeros((n_bootstraps, n_years_to_extract, 50, 50), dtype=np.float32)
+    historical_temps = np.zeros((n_bootstraps, n_years_to_extract, 50, 50), dtype=np.float32) if temps is not None else None
     
     for bootstrap_idx in range(n_bootstraps):
         # Get the last n_years_to_extract years of this bootstrap
@@ -159,15 +180,23 @@ def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to
             global_idx = bootstrap_idx * n_years_total + start_year + year_offset
             historical_spawners[bootstrap_idx, year_offset] = spawners[global_idx]
             historical_recruits[bootstrap_idx, year_offset] = recruits[global_idx]
+            if temps is not None:
+                historical_temps[bootstrap_idx, year_offset] = temps[global_idx]
     
-    return historical_spawners, historical_recruits
+    
+    return historical_spawners, historical_recruits, historical_temps
+    
 
 
 def get_dataloaders(level='easy', batch_size=5, memory_years=5,
                     train_years=22, val_years=5, test_years=3, 
-                    data_type='dummy', include_current_spawner=True):
+                    data_type='dummy', include_current_spawner=True,
+                    lag=0): 
+    
     if data_type == 'real':
-        data_dir = f"data/real/splits/real/"
+        # ---> DYNAMICALLY ROUTE TO THE CORRECT LAG FOLDER <---
+        lag_folder = f"lag{lag}" if lag > 0 else "nolag"
+        data_dir = f"data/real/splits/{lag_folder}/real/"
         mask_path = "data/real/output/spatial_mask.npy"
         level = 'real'
     else:
@@ -186,6 +215,7 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
     train_ds = CrabDataset(
         data_dir + f"train_spawners_{level}.npy",
         data_dir + f"train_recruits_{level}.npy",
+        data_dir + f"train_temp_{level}.npy" if level == 'real' else None,
         n_years=train_years, memory_years=memory_years,
         year_offset=0, mask_path=mask_path,
         year_mask=train_year_mask,
@@ -193,9 +223,9 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
     )
 
     # 2. Historical context for val
-    train_hist_spawners, train_hist_recruits = get_last_n_years(
+    train_hist_spawners, train_hist_recruits, train_hist_temps = get_last_n_years(
         train_ds.spawners, train_ds.recruits,
-        n_bootstraps, train_years, memory_years
+        n_bootstraps, train_years, memory_years, train_ds.temps if train_ds.temps is not None else None
     )
     train_hist_year_mask = train_year_mask[-memory_years:]  # last 5 years of train
 
@@ -203,9 +233,11 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
     val_ds = CrabDataset(
         data_dir + f"val_spawners_{level}.npy",
         data_dir + f"val_recruits_{level}.npy",
+        data_dir + f"val_temp_{level}.npy" if level == 'real' else None,
         n_years=val_years, memory_years=memory_years,
         historical_spawners=train_hist_spawners,
         historical_recruits=train_hist_recruits,
+        historical_temps=train_hist_temps,
         year_offset=train_years, mask_path=mask_path,
         year_mask=val_year_mask,
         historical_year_mask=train_hist_year_mask,
@@ -213,9 +245,9 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
     )
 
     # 4. Historical context for test
-    val_hist_spawners, val_hist_recruits = get_last_n_years(
+    val_hist_spawners, val_hist_recruits, val_hist_temps = get_last_n_years(
         val_ds.spawners, val_ds.recruits,
-        n_bootstraps, val_years, memory_years
+        n_bootstraps, val_years, memory_years, val_ds.temps if val_ds.temps is not None else None
     )
     val_hist_year_mask = val_year_mask[-memory_years:]  # last 5 years of val
 
@@ -223,9 +255,11 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
     test_ds = CrabDataset(
         data_dir + f"test_spawners_{level}.npy",
         data_dir + f"test_recruits_{level}.npy",
+        data_dir + f"test_temp_{level}.npy" if level == 'real' else None,
         n_years=test_years, memory_years=memory_years,
         historical_spawners=val_hist_spawners,
         historical_recruits=val_hist_recruits,
+        historical_temps=val_hist_temps,
         year_offset=train_years + val_years, mask_path=mask_path,
         year_mask=test_year_mask,
         historical_year_mask=val_hist_year_mask,

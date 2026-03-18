@@ -29,7 +29,7 @@ class CrabTransformer(nn.Module):
 
 
         """
-    def __init__(self, grid_size=50, patch_size=5, in_channels=11, embed_dim=128, num_heads=8, num_layers=6, d_ff=512, dropout=0.1):
+    def __init__(self, grid_size=50, patch_size=5, in_channels=17, embed_dim=128, num_heads=8, num_layers=6, d_ff=512, dropout=0.1):
         super().__init__()
 
         # initialize all of the variables

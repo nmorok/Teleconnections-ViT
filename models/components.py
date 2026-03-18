@@ -110,7 +110,7 @@ class PatchEmbedding(nn.Module):
     """
     Fully seperate channel embeddings - each channel gets its own projection before mixing.
     """
-    def __init__(self, grid_size=50, patch_size=5, in_channels=11, embed_dim=128, dropout=0.1):
+    def __init__(self, grid_size=50, patch_size=5, in_channels=17, embed_dim=128, dropout=0.1):
         super().__init__()
         self.grid_size = grid_size
         self.patch_size = patch_size
@@ -161,6 +161,13 @@ class PatchEmbedding(nn.Module):
                     # mask[:, 0] applies to lookback-1 (channel 6), etc.
                     m = mask[:, c-5].view(batch_size, 1, 1)
                     channel_embed = channel_embed * m
+                elif c == 11: # Temperature channel (if it exists) is masked the same way as the current spawner channel, since it's from the same year.
+                    m = mask[:, 0].view(batch_size, 1, 1)
+                    channel_embed = channel_embed * m
+                elif 12 <= c <= 16: # Temperature history channels (if they exist) are masked the same way as the spawner history channels, since they are from the same years.
+                    m = mask[:, c-11].view(batch_size, 1, 1)
+                    channel_embed = channel_embed * m
+
             channel_embeds.append(channel_embed)
         
         # Concatenate: [B, 100, 132]

@@ -13,6 +13,12 @@ def create_temporal_splits(data_type='dummy', n_years=30, train_years=22,
         data_dir = Path("data/real/output")
         spawners = np.load(data_dir / "gridded_spawners.npy")
         recruits = np.load(data_dir / "gridded_recruits.npy")
+        temps = np.load(data_dir / "gridded_bottom_temp.npy")
+
+        # Tile temperature array to match the 100 bootstraps 
+        # (Since environment is static across bootstraps)
+        n_boot, n_years_total, h, w = spawners.shape
+        temps = np.repeat(temps[np.newaxis, ...], n_boot, axis=0) # -> [100, 36, 50, 50]
         
         # Load year mask (0 for 2020, 1 for valid years)
         year_mask_path = data_dir / "year_mask.npy"
@@ -24,11 +30,13 @@ def create_temporal_splits(data_type='dummy', n_years=30, train_years=22,
             full_year_mask[32] = 0.0
             print("⚠️  year_mask.npy not found, constructed from known 2020 index")
 
-        n_boot, n_years_total, h, w = spawners.shape
 
         # PRE-ALIGN THE LAG
         aligned_spawners = spawners[:, :n_years_total - lag]
         aligned_recruits = recruits[:, lag:]
+        aligned_temps = temps[:, :n_years_total - lag] # align the temps with the spawners 
+
+
         recruit_mask = full_year_mask[lag:]  # shift mask to align with recruits
         spawner_mask = full_year_mask[:n_years_total - lag]  # same slicing for spawners
         aligned_year_mask = (recruit_mask * spawner_mask).astype(np.float32)  # combined mask for valid years
@@ -36,28 +44,34 @@ def create_temporal_splits(data_type='dummy', n_years=30, train_years=22,
         # Temporal Split
         train_spawn = aligned_spawners[:, :train_years]
         train_recruit = aligned_recruits[:, :train_years]
+        train_temp = aligned_temps[:, :train_years]
         train_year_mask = aligned_year_mask[:train_years]
 
         val_spawn = aligned_spawners[:, train_years:train_years+val_years]
         val_recruit = aligned_recruits[:, train_years:train_years+val_years]
+        val_temp = aligned_temps[:, train_years:train_years+val_years]
         val_year_mask = aligned_year_mask[train_years:train_years+val_years]
 
         test_spawn = aligned_spawners[:, train_years+val_years:train_years+val_years+test_years]
         test_recruit = aligned_recruits[:, train_years+val_years:train_years+val_years+test_years]
+        test_temp = aligned_temps[:, train_years+val_years:train_years+val_years+test_years]
         test_year_mask = aligned_year_mask[train_years+val_years:train_years+val_years+test_years]
 
         # FLATTEN
         train_spawn = train_spawn.reshape(-1, h, w)
         train_recruit = train_recruit.reshape(-1, h, w)
+        train_temp = train_temp.reshape(-1, h, w)
         val_spawn = val_spawn.reshape(-1, h, w)
         val_recruit = val_recruit.reshape(-1, h, w)
+        val_temp = val_temp.reshape(-1, h, w)
         test_spawn = test_spawn.reshape(-1, h, w)
         test_recruit = test_recruit.reshape(-1, h, w)
+        test_temp = test_temp.reshape(-1, h, w)
 
         splits = {
-            "train_spawn": train_spawn, "train_recruit": train_recruit,
-            "val_spawn": val_spawn, "val_recruit": val_recruit,
-            "test_spawn": test_spawn, "test_recruit": test_recruit,
+            "train_spawn": train_spawn, "train_recruit": train_recruit, "train_temp": train_temp,
+            "val_spawn": val_spawn, "val_recruit": val_recruit, "val_temp": val_temp,
+            "test_spawn": test_spawn, "test_recruit": test_recruit, "test_temp": test_temp,
             "train_year_mask": train_year_mask,
             "val_year_mask": val_year_mask,
             "test_year_mask": test_year_mask,
@@ -104,10 +118,17 @@ def save_splits(splits, level, directory):
     np.save(splits_dir / f"val_recruits_{level}.npy", splits["val_recruit"])
     np.save(splits_dir / f"test_spawners_{level}.npy", splits["test_spawn"])
     np.save(splits_dir / f"test_recruits_{level}.npy", splits["test_recruit"])
+    
     # Save year masks
     np.save(splits_dir / f"train_year_mask_{level}.npy", splits["train_year_mask"])
     np.save(splits_dir / f"val_year_mask_{level}.npy", splits["val_year_mask"])
     np.save(splits_dir / f"test_year_mask_{level}.npy", splits["test_year_mask"])
+
+    # Conditionally save temperature splits (only if they exist in the dictionary) <---
+    if "train_temp" in splits:
+        np.save(splits_dir / f"train_temp_{level}.npy", splits["train_temp"])
+        np.save(splits_dir / f"val_temp_{level}.npy", splits["val_temp"])
+        np.save(splits_dir / f"test_temp_{level}.npy", splits["test_temp"])
 
     print(f"\nSaved to: {splits_dir}\n")
 
@@ -134,5 +155,14 @@ if __name__ == "__main__":
                                          test_years=4,
                                          n_bootstraps=100, 
                                          lag=0)
-    save_splits(real_splits, level='real', directory="data/real/splits")
-        
+    save_splits(real_splits, level='real', directory="data/real/splits/nolag")
+
+
+    real_splits = create_temporal_splits(data_type='real', 
+                                         n_years=36,
+                                         train_years=21, 
+                                         val_years=6, 
+                                         test_years=4,
+                                         n_bootstraps=100, 
+                                         lag=5)
+    save_splits(real_splits, level='real', directory="data/real/splits/lag5")
