@@ -51,6 +51,8 @@ class CrabDataset(Dataset):
             # Zero out land/background immediately
             self.spawners[:, self.mask == 0] = 0.0
             self.recruits[:, self.mask == 0] = 0.0
+            if self.temps is not None:
+                self.temps[:, self.mask == 0] = 0.0
         else:
             self.mask = np.ones((50, 50), dtype=np.float32)
         
@@ -112,6 +114,8 @@ class CrabDataset(Dataset):
                     local_idx = bootstrap_idx * self.n_years + target_relative_year
                     memory_spawners[i] = self.spawners[local_idx]
                     memory_recruits[i] = self.recruits[local_idx]
+                    if self.temps is not None:
+                        memory_temps[i] = self.temps[local_idx]
                     temporal_mask[i+1] = 1.0
                 # else: year_mask is 0 (2020), leave as zeros + mask=0
                 
@@ -122,6 +126,8 @@ class CrabDataset(Dataset):
                     if self.historical_year_mask[historical_idx] == 1.0:
                         memory_spawners[i] = self.historical_spawners[bootstrap_idx, historical_idx]
                         memory_recruits[i] = self.historical_recruits[bootstrap_idx, historical_idx]
+                        if self.historical_temps is not None:
+                            memory_temps[i] = self.historical_temps[bootstrap_idx, historical_idx]
                         temporal_mask[i+1] = 1.0
 
         # Handle the new temperature channel
