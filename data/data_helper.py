@@ -135,16 +135,23 @@ class CrabDataset(Dataset):
             current_temp = self.temps[idx]
             if self.year_mask[relative_year_idx] == 0.0:
                  current_temp = np.zeros_like(current_temp)
-        else:
-            current_temp = np.zeros((50, 50), dtype=np.float32)
         
-        input_tensor = torch.cat([
+        
+        tensor_list = [
             torch.tensor(current_spawner, dtype=torch.float32).unsqueeze(0),
             torch.tensor(memory_spawners, dtype=torch.float32),
-            torch.tensor(memory_recruits, dtype=torch.float32),
-            torch.tensor(current_temp, dtype=torch.float32).unsqueeze(0),
-            torch.tensor(memory_temps, dtype=torch.float32)
-        ], dim=0)
+            torch.tensor(memory_recruits, dtype=torch.float32)
+        ]
+        
+        # 2. Add the 6 temperature channels ONLY if we loaded them
+        if self.temps is not None:
+            tensor_list.extend([
+                torch.tensor(current_temp, dtype=torch.float32).unsqueeze(0),
+                torch.tensor(memory_temps, dtype=torch.float32)
+            ])
+            
+        # 3. Concatenate dynamically
+        input_tensor = torch.cat(tensor_list, dim=0)
 
         target_tensor = torch.tensor(current_recruit, dtype=torch.float32).unsqueeze(0)
         temporal_mask_tensor = torch.tensor(temporal_mask, dtype=torch.float32)
@@ -197,7 +204,7 @@ def get_last_n_years(spawners, recruits, n_bootstraps, n_years_total, n_years_to
 def get_dataloaders(level='easy', batch_size=5, memory_years=5,
                     train_years=22, val_years=5, test_years=3, 
                     data_type='dummy', include_current_spawner=True,
-                    lag=0): 
+                    lag=0, use_temp=True): 
     
     if data_type == 'real':
         # ---> DYNAMICALLY ROUTE TO THE CORRECT LAG FOLDER <---
@@ -221,7 +228,7 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
     train_ds = CrabDataset(
         data_dir + f"train_spawners_{level}.npy",
         data_dir + f"train_recruits_{level}.npy",
-        data_dir + f"train_temp_{level}.npy" if level == 'real' else None,
+        data_dir + f"train_temp_{level}.npy" if (level == 'real' and use_temp) else None,
         n_years=train_years, memory_years=memory_years,
         year_offset=0, mask_path=mask_path,
         year_mask=train_year_mask,
@@ -239,11 +246,11 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
     val_ds = CrabDataset(
         data_dir + f"val_spawners_{level}.npy",
         data_dir + f"val_recruits_{level}.npy",
-        data_dir + f"val_temp_{level}.npy" if level == 'real' else None,
+        data_dir + f"val_temp_{level}.npy" if (level == 'real' and use_temp) else None,
         n_years=val_years, memory_years=memory_years,
         historical_spawners=train_hist_spawners,
         historical_recruits=train_hist_recruits,
-        historical_temps=train_hist_temps,
+        historical_temps=train_hist_temps if train_hist_temps is not None else None,
         year_offset=train_years, mask_path=mask_path,
         year_mask=val_year_mask,
         historical_year_mask=train_hist_year_mask,
@@ -261,11 +268,11 @@ def get_dataloaders(level='easy', batch_size=5, memory_years=5,
     test_ds = CrabDataset(
         data_dir + f"test_spawners_{level}.npy",
         data_dir + f"test_recruits_{level}.npy",
-        data_dir + f"test_temp_{level}.npy" if level == 'real' else None,
+        data_dir + f"test_temp_{level}.npy" if (level == 'real' and use_temp) else None,
         n_years=test_years, memory_years=memory_years,
         historical_spawners=val_hist_spawners,
         historical_recruits=val_hist_recruits,
-        historical_temps=val_hist_temps,
+        historical_temps=val_hist_temps if val_hist_temps is not None else None,
         year_offset=train_years + val_years, mask_path=mask_path,
         year_mask=test_year_mask,
         historical_year_mask=val_hist_year_mask,
