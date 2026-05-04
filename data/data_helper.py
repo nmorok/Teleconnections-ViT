@@ -258,9 +258,11 @@ class CrabDataset(Dataset):
         if self.use_temp and self.include_current_spawner:
             current_temp = self.temps[idx]
             if self.year_mask[relative_year] == 0.0:
-                current_temp = np.zeros_like(current_temp)  # zero out 2020
+                current_temp = np.zeros_like(current_temp)
+            else:
+                temporal_mask[0] = 1.0  # set current-year slot if spawners didn't
         else:
-            current_temp = None  # excluded or temp not loaded
+            current_temp = None
 
         # ---- Build input tensor dynamically from selected groups --------
         # current_spawner / current_temp are None when include_current_spawner=False

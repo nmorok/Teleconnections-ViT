@@ -1,0 +1,394 @@
+"""
+=============================================================================
+Integrated Gradients for CrabTransformer (Targeted Runs)
+=============================================================================
+Post-hoc attribution analysis. Run AFTER training is complete.
+"""
+
+import os
+import json
+import numpy as np
+import torch
+import matplotlib
+import matplotlib.pyplot as plt
+
+# Adjust based on your environment
+REPO_DIR   = '/content/Teleconnections-ViT'
+import sys
+sys.path.insert(0, REPO_DIR)
+
+from models.model import CrabTransformer
+from data.data_helper import get_dataloaders
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+DRIVE_DIR  = '/content/drive/MyDrive/Teleconnection_ViT'
+OUTPUTS_DIR = os.path.join(DRIVE_DIR, 'model_outputs')
+SAVE_DIR   = os.path.join(DRIVE_DIR, 'analysis/attribution')
+
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+CHANNEL_NAMES = [
+    'Spawner (t)', 'Spawner (t-1)', 'Spawner (t-2)', 'Spawner (t-3)', 'Spawner (t-4)', 'Spawner (t-5)',
+    'Recruit (t-1)', 'Recruit (t-2)', 'Recruit (t-3)', 'Recruit (t-4)', 'Recruit (t-5)',
+    'Temp (t)', 'Temp (t-1)', 'Temp (t-2)', 'Temp (t-3)', 'Temp (t-4)', 'Temp (t-5)'
+]
+
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+# =============================================================================
+# STEP 1: COMPUTE BASELINE (mean field from training data)
+# =============================================================================
+
+def compute_baseline(train_loader):
+    print('  Computing baseline (mean training field)...')
+    all_inputs = []
+    for inputs, _, _, _, _, _ in train_loader:
+        all_inputs.append(inputs)
+
+    stacked = torch.cat(all_inputs, dim=0)
+    baseline = stacked.mean(dim=0, keepdim=True)
+
+    print(f'    Baseline from {stacked.shape[0]} samples')
+    print(f'    Range: [{baseline.min():.3f}, {baseline.max():.3f}]')
+    return baseline
+
+
+# =============================================================================
+# STEP 2: ORGANIZE SAMPLES BY YEAR
+# =============================================================================
+
+def collect_samples_by_year(loader):
+    by_year = {}
+
+    for inputs, targets, mask, year_idx, spat_mask, val_year in loader:
+        batch_size = inputs.shape[0]
+        for i in range(batch_size):
+            if val_year[i] == 0:
+                continue
+
+            yr = int(year_idx[i].item())
+            if yr not in by_year:
+                by_year[yr] = []
+            by_year[yr].append((
+                inputs[i:i+1],
+                targets[i:i+1],
+                mask[i:i+1],
+                year_idx[i:i+1],
+            ))
+
+    for yr in sorted(by_year.keys()):
+        print(f'    Year {yr}: {len(by_year[yr])} bootstrap samples')
+
+    return by_year
+
+
+# =============================================================================
+# STEP 3: INTEGRATED GRADIENTS (core computation)
+# =============================================================================
+
+def integrated_gradients(model, actual_input, baseline, year_idx,
+                         temporal_mask, n_steps=50, output_fn=None):
+    if output_fn is None:
+        output_fn = lambda out: out.mean()
+
+    delta = actual_input - baseline
+    accumulated_grads = torch.zeros_like(actual_input)
+
+    for step in range(n_steps):
+        alpha = step / n_steps
+        interpolated = baseline + alpha * delta
+        interpolated = interpolated.detach().clone().requires_grad_(True)
+
+        output = model(interpolated, year_idx, temporal_mask)
+        scalar_output = output_fn(output)
+
+        model.zero_grad()
+        scalar_output.backward()
+
+        accumulated_grads += interpolated.grad.detach()
+
+    attribution = (accumulated_grads / n_steps) * delta
+
+    return attribution.squeeze(0).cpu().numpy()
+
+
+# =============================================================================
+# STEP 4: RUN IG PER YEAR, AVERAGE ACROSS BOOTSTRAPS
+# =============================================================================
+
+def compute_yearly_attributions(model, by_year, baseline, n_steps=50, output_fn=None):
+    baseline = baseline.to(DEVICE)
+    yearly_attr = {}
+    yearly_inputs = {}
+
+    for yr in sorted(by_year.keys()):
+        samples = by_year[yr]
+        n_bootstraps = len(samples)
+        print(f'\n  Year {yr}: running IG on {n_bootstraps} bootstraps...')
+
+        attr_list = []
+        input_list = []
+
+        for idx, (inp, tgt, msk, yr_idx) in enumerate(samples):
+            inp_dev  = inp.to(DEVICE)
+            yr_dev   = yr_idx.to(DEVICE)
+            msk_dev  = msk.to(DEVICE)
+
+            attr = integrated_gradients(
+                model, inp_dev, baseline,
+                yr_dev, msk_dev,
+                n_steps=n_steps, output_fn=output_fn
+            )
+            attr_list.append(attr)
+            input_list.append(inp.squeeze(0).numpy())
+
+            if (idx + 1) % 25 == 0:
+                print(f'    {idx + 1}/{n_bootstraps} done')
+
+        yearly_attr[yr]   = np.stack(attr_list).mean(axis=0)
+        yearly_inputs[yr] = np.stack(input_list).mean(axis=0)
+
+        print(f'    Year {yr} done. Attr range: [{yearly_attr[yr].min():.6f}, {yearly_attr[yr].max():.6f}]')
+
+    return yearly_attr, yearly_inputs
+
+
+# =============================================================================
+# STEP 5: VISUALIZATION
+# =============================================================================
+
+def plot_year_panel(yr, mean_input, mean_attr, meta, out_name):
+    use_temp = meta['use_temp']
+    n_channels = meta['in_channels']
+
+    rows_per_half = 3 if use_temp else 2
+    total_rows = rows_per_half * 2
+
+    fig, axes = plt.subplots(total_rows, 6, figsize=(24, 4 * total_rows))
+
+    abs_attr = np.abs(mean_attr)
+    vmax_attr = np.percentile(abs_attr, 99)
+
+    # ── Top Half: Mean Input Channels ──
+    for c in range(n_channels):
+        row, col = c // 6, c % 6
+        ax = axes[row, col]
+        ax.imshow(mean_input[c], cmap='viridis', vmin=0, vmax=8 if c < 11 else None)
+        ax.set_title(f'Input: {CHANNEL_NAMES[c]}', fontsize=8, fontweight='bold')
+        ax.axis('off')
+
+    # Aggregate input spot
+    ax = axes[n_channels // 6, n_channels % 6]
+    input_agg = np.abs(mean_input).sum(axis=0)
+    ax.imshow(input_agg, cmap='viridis')
+    ax.set_title('Input: Aggregate', fontsize=8, fontweight='bold')
+    ax.axis('off')
+
+    # ── Bottom Half: Attribution Channels ──
+    for c in range(n_channels):
+        row, col = rows_per_half + (c // 6), c % 6
+        ax = axes[row, col]
+        im = ax.imshow(mean_attr[c], cmap='RdBu_r', vmin=-vmax_attr, vmax=vmax_attr)
+        ax.set_title(f'Attr: {CHANNEL_NAMES[c]}', fontsize=8, fontweight='bold')
+        ax.axis('off')
+
+    # Aggregate |attribution| spot
+    ax = axes[rows_per_half + (n_channels // 6), n_channels % 6]
+    agg_attr = abs_attr.sum(axis=0)
+    im_agg = ax.imshow(agg_attr, cmap='hot')
+    ax.set_title('Attr: Aggregate |IG|', fontsize=8, fontweight='bold')
+    ax.axis('off')
+
+    fig.suptitle(
+        f'Year {yr} — {out_name}\n'
+        f'Top: Mean Input   |   Bottom: Attribution (red=+recruit, blue=-recruit)',
+        fontsize=16, fontweight='bold'
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    path = os.path.join(SAVE_DIR, f'ig_year{yr}_{out_name}.png')
+    plt.savefig(path, dpi=150)
+    print(f'  Saved: {path}')
+    plt.close()
+
+
+def plot_grand_average(yearly_attr, yearly_inputs, meta, out_name):
+    years = sorted(yearly_attr.keys())
+    grand_attr  = np.stack([yearly_attr[yr] for yr in years]).mean(axis=0)
+    grand_input = np.stack([yearly_inputs[yr] for yr in years]).mean(axis=0)
+
+    plot_year_panel('AVG', grand_input, grand_attr, meta, out_name)
+
+
+def plot_channel_bar_yearly(yearly_attr, meta, out_name):
+    years = sorted(yearly_attr.keys())
+
+    data = {}
+    for yr in years:
+        totals = np.abs(yearly_attr[yr]).sum(axis=(1, 2))
+        data[f'Yr {yr}'] = totals / totals.sum() * 100
+
+    grand = np.stack([yearly_attr[yr] for yr in years]).mean(axis=0)
+    grand_totals = np.abs(grand).sum(axis=(1, 2))
+    data['Average'] = grand_totals / grand_totals.sum() * 100
+
+    # Read all flags
+    use_temp = meta['use_temp']
+    use_recruits = meta['use_recruits']
+    incl_curr = meta['incl_curr']
+    n_channels = meta['in_channels']
+
+    # --- THE FIX: Conditionally build the entire active names list ---
+    active_names = []
+
+    # 1. Spawner names (always present in these 3 models)
+    if incl_curr: active_names.append('Spawner (t)')
+    active_names.extend(['Spawner (t-1)', 'Spawner (t-2)', 'Spawner (t-3)', 'Spawner (t-4)', 'Spawner (t-5)'])
+
+    # 2. Recruit names
+    if use_recruits:
+        active_names.extend(['Recruit (t-1)', 'Recruit (t-2)', 'Recruit (t-3)', 'Recruit (t-4)', 'Recruit (t-5)'])
+
+    # 3. Temp names
+    if use_temp:
+        if incl_curr: active_names.append('Temp (t)')
+        active_names.extend(['Temp (t-1)', 'Temp (t-2)', 'Temp (t-3)', 'Temp (t-4)', 'Temp (t-5)'])
+    # ----------------------------------------------------------------
+
+    x = np.arange(n_channels)
+    n_groups = len(data)
+    width = 0.8 / n_groups
+    colors = plt.cm.tab10(np.linspace(0, 1, n_groups))
+
+    fig, ax = plt.subplots(figsize=(16, 6))
+
+    for i, (label, pcts) in enumerate(data.items()):
+        offset = (i - n_groups / 2 + 0.5) * width
+        bars = ax.bar(x + offset, pcts, width, label=label,
+                      color=colors[i], alpha=0.8, edgecolor='black',
+                      linewidth=0.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(active_names, rotation=45, ha='right')
+    ax.set_ylabel('Share of Total Attribution (%)')
+    ax.set_title(
+        f'Channel Attribution by Year: {out_name}',
+        fontsize=14, fontweight='bold'
+    )
+    ax.legend(loc='upper right')
+    ax.grid(axis='y', alpha=0.3, ls='--')
+    plt.tight_layout()
+
+    path = os.path.join(SAVE_DIR, f'ig_bar_yearly_{out_name}.png')
+    plt.savefig(path, dpi=150)
+    print(f'  Saved: {path}')
+    plt.close()
+
+
+# =============================================================================
+# MAIN ENTRY POINT
+# =============================================================================
+
+def run_targeted_ig(model_size, level, channel_cfg, pred_mode, criterion, phase='TEST', n_steps=50):
+
+    out_name = f"{model_size}_{level}_{channel_cfg}_{pred_mode}_{criterion}"
+
+    print(f'\n{"="*70}')
+    print(f' Running IG for: {out_name}')
+    print(f' Phase: {phase} | Steps: {n_steps}')
+    print(f'{"="*70}')
+
+    # 1. Resolve exact directory matching train.py output structure
+    ckpt_dir = os.path.join(OUTPUTS_DIR, model_size, level, channel_cfg, pred_mode, criterion)
+    ckpt_path = os.path.join(ckpt_dir, 'best_model.pt')
+    history_path = os.path.join(ckpt_dir, 'training_history.json')
+
+    if not os.path.exists(ckpt_path) or not os.path.exists(history_path):
+        print(f'  ⚠️ Missing model or history file in: {ckpt_dir}\n  Skipping...')
+        return
+
+    # 2. Load architectural metadata dynamically saved during training!
+    with open(history_path, 'r') as f:
+        meta = json.load(f)['channel_cfg_meta']
+
+    print(f"  Loaded Meta -> Channels: {meta['in_channels']}, Lag: {meta['lag']}, Temp: {meta['use_temp']}")
+
+    # 3. Load Model
+    model = CrabTransformer(
+        grid_size=50, patch_size=5,
+        in_channels=meta['in_channels'],
+        embed_dim=meta['embed_dim'],
+        num_heads=meta['num_heads'],
+        num_layers=meta['num_layers'],
+        d_ff=meta['d_ff'],
+        dropout=0,
+        channel_mask_indices=meta['channel_mask_indices'] # Required for CrabTransformer!
+    ).to(DEVICE)
+    model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE))
+    model.eval()
+
+    # 4. Load Data (Always loads real data structure per these targeted runs)
+    t_years, v_years, te_years = (24, 8, 4) if meta['lag'] == 0 else (21, 6, 4)
+
+    train_loader, val_loader, test_loader = get_dataloaders(
+        batch_size=8, memory_years=5,
+        train_years=t_years, val_years=v_years, test_years=te_years,
+        data_type='real', level=level,
+        include_current_spawner=meta['incl_curr'],
+        lag=meta['lag'],
+        use_temp=meta['use_temp'],
+        use_spawners=meta['use_spawners'],
+        use_recruits=meta['use_recruits']
+    )
+
+    baseline = compute_baseline(train_loader)
+
+    if phase == 'TEST':
+        target_loader = test_loader
+    elif phase == 'VAL':
+        target_loader = val_loader
+    else:
+        target_loader = train_loader
+
+    print(f'\n  Collecting {phase} samples by year...')
+    by_year = collect_samples_by_year(target_loader)
+
+    yearly_attr, yearly_inputs = compute_yearly_attributions(
+        model, by_year, baseline, n_steps=n_steps
+    )
+
+    # ── Save raw arrays ──
+    for yr in sorted(yearly_attr.keys()):
+        np.save(os.path.join(SAVE_DIR, f'ig_attr_yr{yr}_{out_name}.npy'), yearly_attr[yr])
+        np.save(os.path.join(SAVE_DIR, f'ig_input_yr{yr}_{out_name}.npy'), yearly_inputs[yr])
+
+    print(f'  Raw arrays saved to {SAVE_DIR}')
+
+    print(f'\n  Generating visualizations...')
+    for yr in sorted(yearly_attr.keys()):
+        plot_year_panel(yr, yearly_inputs[yr], yearly_attr[yr], meta, out_name)
+
+    plot_grand_average(yearly_attr, yearly_inputs, meta, out_name)
+    plot_channel_bar_yearly(yearly_attr, meta, out_name)
+
+if __name__ == '__main__':
+    # =========================================================================
+    # TARGETED RUNS: Only the 3 configurations needed for the paper!
+    # =========================================================================
+
+    TARGET_MODELS = [
+        # 1. The "Nowcast" Baseline
+        {'model_size': 'normal', 'level': 'real', 'channel_cfg': 'all', 'pred_mode': 'normal', 'criterion': 'MSE'},
+
+        # 2. The Operational Forecast (1-Year-Ahead)
+        {'model_size': 'small', 'level': 'real', 'channel_cfg': 'all', 'pred_mode': 'one_year_ahead', 'criterion': 'MSE'},
+
+        # 3. The Biological Lag Proof (5-Year Lag)
+        {'model_size': 'normal', 'level': 'real', 'channel_cfg': 'sp_temp', 'pred_mode': 'lag5', 'criterion': 'MSE'}
+    ]
+
+    for run_params in TARGET_MODELS:
+        run_targeted_ig(**run_params, phase='TEST', n_steps=50)
