@@ -232,9 +232,9 @@ def plot_year_panel(yr, mean_input, mean_attr, meta, out_name, display_name):
 
     cal_yr = f'{yr + DATA_START_YEAR}' if isinstance(yr, int) else 'Average'
     fig.suptitle(
-        'Spatial Attribution Averaged Across Test Years' +
+        'Spatial Attribution' +
         f'{display_name} — {cal_yr}\n'
-        'Top: Mean Input  |  Bottom: Attribution  (red = +recruit, blue = −recruit)',
+        'Top: Mean input across bootstraps  |  Bottom: Attribution  (red = +recruit, blue = −recruit)',
         fontsize=FS_TITLE, fontweight='bold',
     )
     plt.tight_layout(rect=[0, 0, 1, 0.94])
