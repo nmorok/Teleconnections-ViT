@@ -51,7 +51,7 @@ FS_LEGEND     = 15   # legend entries
 # Runs not listed here fall back to an auto-generated label.
 RUN_DISPLAY_NAMES = {
     ('normal', 'real', 'all',        'normal',        'MSE'):     'All channels | Now-cast | MSE | Base-size',
-    ('small',  'real', 'temp_only',  'normal',        'Tweedie'): 'Bottom Temp only | Now-cast | Tweedie | Reduced-size',
+    ('small',  'real', 'temp_only',  'normal',        'MSE'): 'Bottom Temp only | Now-cast | MSE | Reduced-size',
     ('small',  'real', 'rec_temp',   'one_year_ahead','MSE'):     'Recruits + Bottom Temp | 1-yr ahead | MSE | Reduced-size',
     ('normal', 'real', 'sp_temp',    'lag5',          'MSE'):     'Spawners + Bottom Temp | Lag-5 | MSE | Base-size',
 }
@@ -59,7 +59,7 @@ RUN_DISPLAY_NAMES = {
 # (model_size, level, channel_cfg, pred_mode, criterion)
 TARGET_MODELS = [
     ('normal', 'real', 'all',       'normal',        'MSE'),
-    ('small',  'real', 'temp_only', 'normal',        'Tweedie'),
+    ('small',  'real', 'temp_only', 'normal',        'MSE'),
     ('small',  'real', 'rec_temp',  'one_year_ahead','MSE'),
     ('normal', 'real', 'sp_temp',   'lag5',          'MSE'),
 ]
@@ -69,21 +69,25 @@ TARGET_MODELS = [
 
 def get_active_channel_names(meta):
     """Return channel display names in the same order as the model's input channels."""
+    lag   = meta.get('lag', 0)
     names = []
     incl  = meta['incl_curr']
+
+    def _t(offset):
+        """Format a time label relative to recruit year, e.g. lag=5 → t becomes t-5."""
+        total = lag + offset
+        return f't-{total}' if total > 0 else 't'
+
     if meta['use_spawners']:
         if incl:
-            names.append('Spawner (t)')
-        names.extend(['Spawner (t-1)', 'Spawner (t-2)', 'Spawner (t-3)',
-                       'Spawner (t-4)', 'Spawner (t-5)'])
+            names.append(f'Spawner ({_t(0)})')
+        names.extend([f'Spawner ({_t(k)})' for k in range(1, 6)])
     if meta['use_recruits']:
-        names.extend(['Recruit (t-1)', 'Recruit (t-2)', 'Recruit (t-3)',
-                       'Recruit (t-4)', 'Recruit (t-5)'])
+        names.extend([f'Recruit ({_t(k)})' for k in range(1, 6)])
     if meta['use_temp']:
         if incl:
-            names.append('Bot. Temp (t)')
-        names.extend(['Bot. Temp (t-1)', 'Bot. Temp (t-2)', 'Bot. Temp (t-3)',
-                       'Bot. Temp (t-4)', 'Bot. Temp (t-5)'])
+            names.append(f'Bot. Temp ({_t(0)})')
+        names.extend([f'Bot. Temp ({_t(k)})' for k in range(1, 6)])
     return names
 
 
@@ -230,9 +234,10 @@ def plot_year_panel(yr, mean_input, mean_attr, meta, out_name, display_name):
         'Attr: Aggregate |IG|', fontsize=FS_PANEL, fontweight='bold')
     axes[rows_per_half + agg_row, agg_col].axis('off')
 
-    cal_yr = f'{yr + DATA_START_YEAR}' if isinstance(yr, int) else 'Average'
+    lag    = meta.get('lag', 0)
+    cal_yr = f'{yr + DATA_START_YEAR + lag}' if isinstance(yr, int) else 'Average'
     fig.suptitle(
-        'Spatial Attribution' +
+        'Spatial Attribution\n' +
         f'{display_name} — {cal_yr}\n'
         'Top: Mean input across bootstraps  |  Bottom: Attribution  (red = +recruit, blue = −recruit)',
         fontsize=FS_TITLE, fontweight='bold',
