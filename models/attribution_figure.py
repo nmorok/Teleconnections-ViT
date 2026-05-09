@@ -184,12 +184,12 @@ def plot_year_panel(yr, mean_input, mean_attr, meta, out_name, display_name):
         c.set_bad('white')
         return c
 
-    n_channels   = meta['in_channels']
-    ch_names     = get_active_channel_names(meta)
-    n_items      = n_channels + 1          # channels + aggregate panel
-    n_cols       = min(n_channels, 6)      # at most 6 columns
-    rows_per_half = math.ceil(n_items / n_cols)
-    total_rows   = rows_per_half * 2
+    n_channels    = meta['in_channels']
+    ch_names      = get_active_channel_names(meta)
+    n_cols        = min(n_channels, 6)
+    rows_input    = math.ceil(n_channels / n_cols)
+    rows_attr     = math.ceil((n_channels + 1) / n_cols)
+    total_rows    = rows_input + rows_attr
 
     cell_size = 4.0
     fig, axes = plt.subplots(
@@ -216,23 +216,20 @@ def plot_year_panel(yr, mean_input, mean_attr, meta, out_name, display_name):
         ax.set_title(f'Input: {ch_names[c]}', fontsize=FS_PANEL, fontweight='bold')
         ax.axis('off')
 
-    agg_row, agg_col = divmod(n_channels, n_cols)
-    axes[agg_row, agg_col].imshow(_masked(np.abs(mean_input).sum(axis=0)), cmap=_cmap('viridis'))
-    axes[agg_row, agg_col].set_title('Input: Aggregate', fontsize=FS_PANEL, fontweight='bold')
-    axes[agg_row, agg_col].axis('off')
 
     # Bottom half — attribution channels
     for c in range(n_channels):
         row, col = divmod(c, n_cols)
-        ax = axes[rows_per_half + row, col]
+        ax = axes[rows_input + row, col]
         ax.imshow(_masked(mean_attr[c]), cmap=_cmap('RdBu_r'), vmin=-vmax_attr, vmax=vmax_attr)
         ax.set_title(f'Attr: {ch_names[c]}', fontsize=FS_PANEL, fontweight='bold')
         ax.axis('off')
 
-    axes[rows_per_half + agg_row, agg_col].imshow(_masked(abs_attr.sum(axis=0)), cmap=_cmap('hot'))
-    axes[rows_per_half + agg_row, agg_col].set_title(
+    agg_row, agg_col = divmod(n_channels, n_cols)
+    axes[rows_input + agg_row, agg_col].imshow(_masked(abs_attr.sum(axis=0)), cmap=_cmap('hot'))
+    axes[rows_input + agg_row, agg_col].set_title(
         'Attr: Aggregate |IG|', fontsize=FS_PANEL, fontweight='bold')
-    axes[rows_per_half + agg_row, agg_col].axis('off')
+    axes[rows_input + agg_row, agg_col].axis('off')
 
     lag    = meta.get('lag', 0)
     cal_yr = f'{yr + DATA_START_YEAR + lag}' if isinstance(yr, int) else 'Average'

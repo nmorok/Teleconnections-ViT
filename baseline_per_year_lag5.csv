@@ -1,0 +1,4 @@
+lag,calendar_year,mae_mean,mae_sd,spearman_mean,spearman_sd,n_bootstraps
+5,2021,605.0,32.4,0.8108,0.0132,100
+5,2022,483.9,54.4,0.7938,0.0088,100
+5,2023,275.0,32.8,0.8312,0.0085,100

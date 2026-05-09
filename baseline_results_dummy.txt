@@ -1,0 +1,10 @@
+Dummy data — per-bootstrap mean baseline
+Mean in log1p space per bootstrap; metrics in count space
+Train / Val / Test : 18 / 9 / 3 years
+Bootstraps         : 100
+
+Level             MAE   MAE SD     Spearman   Spear SD
+--------------------------------------------------------
+easy           4486.5   5373.4       0.1077     0.3647
+medium         4334.8   4386.7       0.0185     0.3988
+hard           3933.8   4283.6       0.0271     0.3939

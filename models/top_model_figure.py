@@ -3,27 +3,27 @@ top_model_figure.py
 ====================
 Creates a 7-column spatial + line-plot summary figure for top CrabTransformer runs.
 
-Column layout (left → right)
+Row order
+---------
+  0  Climatological baseline  (lag-0)
+  1  All channels | Now-cast | MSE | Base-size
+  2  Temperature only | Now-cast | MSE | Reduced-size
+  3  Recruits + Temp | One-year-ahead | MSE | Reduced-size
+  --- section divider + new column headers ---
+  4  Climatological baseline  (lag-5)
+  5  Spawners + Temp | Lag-5 | MSE | Base-size
+
+Column headers differ between sections:
+  Lag-0 section : Spawner history (t-1,...,t-5) / Spawner current (t) / ...
+  Lag-5 section : Spawner history (t-6,...,t-10) / Spawner current (t-5) / ...
+
+Changes from previous version
 ------------------------------
-  0  Spawner history   — stacked cards: t-1 (front) … t-5 (back)
-  1  Spawner current   — t, or blank if config excludes it
-  2  Temp history      — stacked cards: t-1 … t-5
-  3  Temp current      — t, or blank if config excludes it
-  4  Recruit history   — stacked cards: t-1 … t-5
-  5  True recruit      — target for the displayed test sample
-  6  Predicted recruit — model output for the same sample
-
-Rows: one per entry in TARGET_RUNS, each with a unique border colour that
-also determines the line colour in the aggregate-recruit plot below.
-
-Usage
------
-  Adjust REPO_DIR / DRIVE_BASE / SAVE_DIR / TARGET_RUNS at the top, then:
-
-      python models/top_model_figure.py
-
-  Or call make_figure() after importing in a Colab cell.
-  GPU is used if available; works on CPU too.
+- Row order updated as above
+- temp_only now-cast uses MSE (not Tweedie)
+- Section divider + second set of column headers for lag-5 rows
+- Line plot legend: removed dashed-line entry
+- Line plot title updated to include "Median across bootstrap"
 """
 
 import os
@@ -38,14 +38,14 @@ import matplotlib.gridspec as gridspec
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 
-# ── Paths ────────────────────────────────────────────────────────────────────
+# ── Paths ─────────────────────────────────────────────────────────────────────
 REPO_DIR   = '/content/Teleconnections-ViT'
 DRIVE_BASE = '/content/drive/MyDrive/Teleconnection_ViT/model_outputs'
 SAVE_DIR   = '/content/drive/MyDrive/Teleconnection_ViT/analysis'
 
 MEMORY_YEARS    = 5
 BATCH_SIZE      = 8
-DATA_START_YEAR = 1988   # year_idx 0 = 1988  (derived: mask[32]=2020 → 2020-32=1988)
+DATA_START_YEAR = 1988
 
 sys.path.insert(0, REPO_DIR)
 from models.model     import CrabTransformer
@@ -61,33 +61,47 @@ ROW_COLORS = [
 ]
 
 # ── Runs to display ───────────────────────────────────────────────────────────
-# (model_size, level, channel_cfg, pred_mode, criterion)
 TARGET_RUNS = [
-    ('normal', 'real', 'all', 'normal', 'MSE'),
-    ('small', 'real', 'temp_only', 'normal', 'Tweedie'),
-    ('small', 'real', 'rec_temp', 'one_year_ahead', 'MSE'),
-    ('normal', 'real', 'sp_temp', 'lag5', 'MSE')
+    ('BASELINE', 'real', 'climatological', 'normal',         'N/A'),  # lag-0 baseline
+    ('normal',   'real', 'all',            'normal',         'MSE'),  # all channels now-cast
+    ('small',    'real', 'temp_only',      'normal',         'MSE'),  # temp only now-cast MSE
+    ('small',    'real', 'rec_temp',       'one_year_ahead', 'MSE'),  # rec+temp 1yr-ahead
+    ('BASELINE', 'real', 'climatological', 'lag5',           'N/A'),  # lag-5 baseline
+    ('normal',   'real', 'sp_temp',        'lag5',           'MSE'),  # sp+temp lag-5
 ]
 
-# ── Run display names ─────────────────────────────────────────────────────────
-# Maps (model_size, level, channel_cfg, pred_mode, criterion) → display label.
-# Edit entries here to control how each run appears in the row labels and legend.
-# If a run spec is not listed, the label is auto-generated from the run tuple.
+# First row index of the lag-5 section (section divider drawn above this row)
+LAG5_SECTION_START = 4
+
 RUN_DISPLAY_NAMES = {
-    ('normal', 'real', 'all',        'normal',        'MSE'):     'All channels | Now-cast | MSE | Base-size',
-    ('small',  'real', 'temp_only',  'normal',        'Tweedie'): 'Bottom Temp only | Now-cast | Tweedie | Reduced-size',
-    ('small',  'real', 'rec_temp',   'one_year_ahead','MSE'):     'Recruits + Bottom Temp | 1-yr ahead | MSE | Reduced-size',
-    ('normal', 'real', 'sp_temp',    'lag5',          'MSE'):     'Spawners + Bottom Temp | Lag-5 | MSE | Base-size',
+    ('BASELINE', 'real', 'climatological', 'normal',         'N/A'): 'Climatological baseline | Now-cast + 1-yr ahead',
+    ('normal',   'real', 'all',            'normal',         'MSE'): 'All channels | Now-cast | MSE | Base-size',
+    ('small',    'real', 'temp_only',      'normal',         'MSE'): 'Bottom Temp only | Now-cast | MSE | Reduced-size',
+    ('small',    'real', 'rec_temp',       'one_year_ahead', 'MSE'): 'Recruits + Bottom Temp | 1-yr ahead | MSE | Reduced-size',
+    ('BASELINE', 'real', 'climatological', 'lag5',           'N/A'): 'Climatological baseline | Lag-5',
+    ('normal',   'real', 'sp_temp',        'lag5',           'MSE'): 'Spawners + Bottom Temp | Lag-5 | MSE | Base-size',
 }
 
-COL_TITLES = [
-    'Spawner history\n(t-1 … t-5)',
+# Column titles for lag-0 section
+COL_TITLES_LAG0 = [
+    'Spawner history\n(t-1,...,t-5)',
     'Spawner\ncurrent (t)',
-    'Bottom Temperature\nhistory (t-1 … t-5)',
+    'Bottom Temperature\nhistory (t-1,...,t-5)',
     'Bottom Temperature\ncurrent (t)',
-    'Recruit history\n(t-1 … t-5)',
-    'Observed recruit',   # col 5 — observed target
-    'Predicted recruit', 
+    'Recruit history\n(t-1,...,t-5)',
+    'Observed\nrecruit',
+    'Predicted\nrecruit',
+]
+
+# Column titles for lag-5 section
+COL_TITLES_LAG5 = [
+    'Spawner history\n(t-6,...,t-10)',
+    'Spawner\ncurrent (t-5)',
+    'Bottom Temperature\nhistory (t-6,...,t-10)',
+    'Bottom Temperature\ncurrent (t-5)',
+    'Recruit history\n(t-1,...,t-5)',
+    'Observed\nrecruit',
+    'Predicted\nrecruit',
 ]
 
 CMAPS = {'spawner': 'YlOrRd', 'temp': 'RdBu_r', 'recruit': 'Blues'}
@@ -104,7 +118,6 @@ def get_year_splits(data_type, lag):
 
 
 def load_run(model_size, level, channel_cfg, pred_mode, criterion):
-    """Load checkpoint + metadata; build model and data loaders."""
     data_type = 'real' if level == 'real' else 'dummy'
     run_dir   = os.path.join(DRIVE_BASE, model_size, level,
                              channel_cfg, pred_mode, criterion)
@@ -146,17 +159,8 @@ def load_run(model_size, level, channel_cfg, pred_mode, criterion):
 
 
 def extract_channels(inp, meta):
-    """
-    Split a [C, 50, 50] input array into named channel groups.
-
-    images[0] in each list = t-1 (most recent); images[-1] = t-5 (oldest).
-
-    Returns a dict with keys:
-      sp_hist, sp_curr, temp_hist, temp_curr, rec_hist
-    Each is a list of arrays or a single array or None.
-    """
-    ch = {k: None for k in ('sp_curr', 'sp_hist',
-                              'temp_curr', 'temp_hist', 'rec_hist')}
+    ch   = {k: None for k in ('sp_curr', 'sp_hist',
+                               'temp_curr', 'temp_hist', 'rec_hist')}
     idx  = 0
     incl = meta['incl_curr']
 
@@ -177,14 +181,6 @@ def extract_channels(inp, meta):
 
 
 def get_test_sample(test_loader, model, bias, valid_mask, target_year_idx=None):
-    """
-    Return (inp_np, target_log, pred_display) for a test sample.
-
-    If target_year_idx is given, returns that specific year (or None if absent).
-    Otherwise returns the sample with the *highest* valid year_idx (most recent),
-    avoiding the edge case where the earliest test year falls in the masked 2020 gap
-    and its t-1 history channel (also 2020) appears blank.
-    """
     best_yr   = -1
     best_data = (None, None, None)
 
@@ -217,7 +213,6 @@ def get_test_sample(test_loader, model, bias, valid_mask, target_year_idx=None):
                       f'pred mean={pred_display[valid_mask].mean():.3f}')
 
                 if target_year_idx is not None:
-                    # Exact match requested — return immediately
                     return inputs[i].numpy(), target_log, pred_display
 
                 if yi > best_yr:
@@ -228,7 +223,6 @@ def get_test_sample(test_loader, model, bias, valid_mask, target_year_idx=None):
 
 
 def collect_yearly_aggregates(loaders, model, bias, valid_mask):
-    """Total recruit abundance per (year, bootstrap) across all splits."""
     from collections import defaultdict
     agg = defaultdict(lambda: {'pred': [], 'obs': []})
     with torch.no_grad():
@@ -257,32 +251,21 @@ def collect_yearly_aggregates(loaders, model, bias, valid_mask):
 
 
 # ============================================================
-#  DRAWING  —  figure-level axes via fig.add_axes()
+#  DRAWING HELPERS
 # ============================================================
-#
-# All spatial axes are created with fig.add_axes([x0, y0, w, h]) in
-# figure coordinates (0→1).  This avoids the ax.inset_axes() / gridspec
-# re-use issues that caused blank panels in previous versions.
-# Positions are obtained from temporary placeholder axes, which are
-# then removed before content is drawn.
 
 def _cell_pos(fig, gs, row, col):
-    """
-    Return the figure-level Bbox for gridspec cell (row, col).
-    A temporary axes is added, its position is read, then it is removed.
-    """
     ax  = fig.add_subplot(gs[row, col])
-    pos = ax.get_position()     # Bbox in figure coords
+    pos = ax.get_position()
     fig.delaxes(ax)
     return pos
 
 
 def _blank_ax(fig, bbox, msg='N/A'):
-    """Add a grey placeholder axes at the given Bbox."""
     ax = fig.add_axes([bbox.x0, bbox.y0, bbox.width, bbox.height])
     ax.set_facecolor('#e8e8e8')
     ax.text(0.5, 0.5, msg, ha='center', va='center',
-            transform=ax.transAxes, fontsize=11, color="#000000", style='italic')
+            transform=ax.transAxes, fontsize=11, color='#000000', style='italic')
     ax.set_xticks([]); ax.set_yticks([])
     for sp in ax.spines.values():
         sp.set_visible(False)
@@ -290,7 +273,6 @@ def _blank_ax(fig, bbox, msg='N/A'):
 
 
 def _make_cmap(name):
-    """Return a copy of the named colormap with bad (masked) values set to black."""
     import copy
     cmap = copy.copy(plt.get_cmap(name))
     cmap.set_bad('black')
@@ -298,7 +280,6 @@ def _make_cmap(name):
 
 
 def _masked(image, valid_mask):
-    """Return a masked array with land cells (outside valid_mask) hidden."""
     if valid_mask is None:
         return image
     return np.ma.array(image, mask=~valid_mask)
@@ -306,7 +287,6 @@ def _masked(image, valid_mask):
 
 def draw_single_ax(fig, bbox, image, cmap, vmin, vmax, border_color,
                    valid_mask=None):
-    """Draw one image in a new axes at the given Bbox with a black background."""
     if image is None:
         _blank_ax(fig, bbox)
         return
@@ -323,34 +303,21 @@ def draw_single_ax(fig, bbox, image, cmap, vmin, vmax, border_color,
 
 def draw_stack_ax(fig, bbox, images, cmap, vmin, vmax, border_color,
                   valid_mask=None):
-    """
-    Draw a deck-of-cards stack of images within the given Bbox.
-
-    images[0] = t-1  (most recent  →  front card, top-right, drawn last/on top)
-    images[-1] = t-5 (oldest       →  back card,  bottom-left, drawn first)
-
-    Older cards peek out from the bottom-left corner.
-    All cards have a black background (masked land cells appear black).
-    """
     valid = [(k, img) for k, img in enumerate(images) if img is not None]
     if not valid:
         _blank_ax(fig, bbox)
         return
 
     n      = len(valid)
-    step_x = bbox.width  * 0.06      # 6 % of cell width per layer
+    step_x = bbox.width  * 0.06
     step_y = bbox.height * 0.06
     card_w = bbox.width  - (n - 1) * step_x
     card_h = bbox.height - (n - 1) * step_y
-
     cmap_obj = _make_cmap(cmap)
 
-    # Draw back → front so the front card (t-1) lands on top.
-    #   rank 0   = t-1  (front): offset = (n-1)*step  → top-right
-    #   rank n-1 = t-5  (back):  offset = 0           → bottom-left
-    for rank in range(n - 1, -1, -1):   # n-1 first (back), 0 last (front)
-        _, img = valid[rank]
-        offset = (n - 1 - rank)          # 0 for back card, n-1 for front card
+    for rank in range(n - 1, -1, -1):
+        _, img  = valid[rank]
+        offset  = (n - 1 - rank)
         x0 = bbox.x0 + offset * step_x
         y0 = bbox.y0 + offset * step_y
 
@@ -367,19 +334,70 @@ def draw_stack_ax(fig, bbox, images, cmap, vmin, vmax, border_color,
             sp.set_visible(True)
 
 
+def _load_baseline_grid(lag: int):
+    for search_dir in [SAVE_DIR, '.']:
+        path = os.path.join(search_dir, f'baseline_mean_grid_lag{lag}.npy')
+        if os.path.exists(path):
+            return np.load(path).astype(np.float32)
+    print(f'  Warning: baseline_mean_grid_lag{lag}.npy not found.')
+    return None
+
+
+def _load_baseline_obs_mean(lag: int):
+    for search_dir in [SAVE_DIR, '.']:
+        path = os.path.join(search_dir, f'baseline_obs_mean_lag{lag}.npy')
+        if os.path.exists(path):
+            return np.load(path).astype(np.float32)
+    return None
+
+
+def _get_baseline_obs_single(lag, target_year_idx, valid_mask):
+    """Load a single-year single-bootstrap observed target for a baseline row."""
+    obs_single = None
+    try:
+        t_yr_b, v_yr_b, te_yr_b = get_year_splits('real', lag)
+        _, _, te_ld_base = get_dataloaders(
+            batch_size=BATCH_SIZE, memory_years=MEMORY_YEARS,
+            train_years=t_yr_b, val_years=v_yr_b, test_years=te_yr_b,
+            level='real', data_type='real',
+            include_current_spawner=True,
+            lag=lag,
+            use_temp=True,
+            use_spawners=True,
+            use_recruits=True,
+        )
+        req_yr  = (target_year_idx - lag if target_year_idx is not None else None)
+        best_yr = -1
+        with torch.no_grad():
+            for batch in te_ld_base:
+                _, targets, _, year_idx, spatial_mask_b, valid_year = batch
+                for i in range(targets.shape[0]):
+                    if valid_year[i] == 0:
+                        continue
+                    yi = int(year_idx[i])
+                    if req_yr is not None and yi != req_yr:
+                        continue
+                    if req_yr is None and yi <= best_yr:
+                        continue
+                    tgt = targets[i, 0].numpy().copy()
+                    tgt[~valid_mask] = 0.0
+                    obs_single = tgt
+                    best_yr    = yi
+                    if req_yr is not None:
+                        break
+                if req_yr is not None and obs_single is not None:
+                    break
+    except Exception as e:
+        print(f'  Warning: Could not load baseline obs target: {e}')
+    return obs_single
+
+
 # ============================================================
 #  MAIN FIGURE
 # ============================================================
 
 def make_figure(runs=None, save_path=None, display_year=None,
                 title='CrabTransformer — Top Model Summary'):
-    """
-    runs         : list of (model_size, level, channel_cfg, pred_mode, criterion).
-                   Defaults to TARGET_RUNS at the top of this file.
-    display_year : int | None  — calendar year to display in the spatial panels
-                   (e.g. 2023).  Converted to year_idx = display_year - DATA_START_YEAR.
-                   If None, the first valid test sample is used.
-    """
     if runs is None:
         runs = TARGET_RUNS
 
@@ -391,31 +409,29 @@ def make_figure(runs=None, save_path=None, display_year=None,
     n_rows = len(runs)
     n_cols = 7
 
-    # ── Font sizes  ──────────────────────────────────────────────────────────
-    # Adjust these values to resize text throughout the entire figure.
-    FS_SUPTITLE    = 18   # main figure title at the very top
-    FS_SECTION_HDR = 16   # "Inputs" / "Output" / "Target" section banners
-    FS_COL_HDR     = 13   # column header labels (e.g. "Spawner history\n(t-1…t-5)")
-    FS_ROW_LABEL   = 14   # run identifier text on the left margin
-    FS_PHASE_LABEL = 13   # TRAIN / VAL / TEST labels in the line plot
-    FS_AXIS_LABEL  = 14   # x-axis and y-axis labels in the line plot
-    FS_AXIS_TITLE  = 13   # title of the line plot
-    FS_LEGEND      = 12   # legend entries
+    # ── Font sizes ────────────────────────────────────────────────────────────
+    FS_SUPTITLE    = 18
+    FS_SECTION_HDR = 16
+    FS_COL_HDR     = 14
+    FS_ROW_LABEL   = 14
+    FS_PHASE_LABEL = 14
+    FS_AXIS_LABEL  = 14
+    FS_AXIS_TITLE  = 14
+    FS_LEGEND      = 14
+    FS_DIVIDER     = 11   # section divider label font size
 
-    # ── Figure size ──────────────────────────────────────────────────────────
-    cell_w    = 2.4
-    cell_h    = 2.6
-    label_w   = 1.6    # extra left margin for row labels
-    line_h    = 5.2
-    top_pad   = 0.55   # space for column headers (section headers go above grid_top)
-    spacer_w  = 0.30   # width of each spacer column (fraction of cell_w); two spacers total
-    fig_w     = label_w + cell_w * n_cols + cell_w * spacer_w * 2
-    fig_h     = top_pad + cell_h * n_rows + line_h + 0.4
+    # ── Figure size ───────────────────────────────────────────────────────────
+    cell_w   = 2.4
+    cell_h   = 2.6
+    label_w  = 2.0
+    line_h   = 5.2
+    top_pad  = 0.55
+    spacer_w = 0.30
+    fig_w    = label_w + cell_w * n_cols + cell_w * spacer_w * 2
+    fig_h    = top_pad + cell_h * n_rows + cell_h * 0.45 + line_h + 0.4
 
     fig = plt.figure(figsize=(fig_w, fig_h), dpi=130)
 
-    # ── Layout ───────────────────────────────────────────────────────────────
-    # Convert label_w to a fraction of fig_w for the left margin.
     left_margin = label_w / fig_w
 
     outer = gridspec.GridSpec(
@@ -425,63 +441,77 @@ def make_figure(runs=None, save_path=None, display_year=None,
         top=0.87, bottom=0.10,
         left=left_margin, right=0.99,
     )
-    # 9 grid columns: data cols 0-4, spacer, data col 5, spacer, data col 6
-    # _gcol maps a 0-6 data column index to its gridspec column index
+
     def _gcol(c):
-        if c < 5:  return c        # inputs: no offset
-        if c == 5: return c + 1    # predicted: skip first spacer
-        return c + 2               # true recruit: skip both spacers
+        if c < 5:  return c
+        if c == 5: return c + 1
+        return c + 2
+
+    # The gridspec has n_rows + 1 rows: a narrow gap row is inserted at
+    # LAG5_SECTION_START to provide physical space for the second column headers.
+    # GAP_H controls how tall the gap row is relative to a data row.
+    GAP_H       = 0.45
+    n_gs_rows   = n_rows + 1   # +1 for the gap row
+    gap_gs_row  = LAG5_SECTION_START   # gridspec row index of the gap
+
+    # Build height_ratios: 1.0 for data rows, GAP_H for the gap row
+    height_ratios = []
+    for gs_r in range(n_gs_rows):
+        height_ratios.append(GAP_H if gs_r == gap_gs_row else 1.0)
 
     grid_top = gridspec.GridSpecFromSubplotSpec(
-        n_rows, n_cols + 2,   # +2 for the two gap spacers
+        n_gs_rows, n_cols + 2,
         subplot_spec=outer[0],
         hspace=0.10, wspace=0.06,
         width_ratios=[1, 1, 1, 1, 1, spacer_w, 1, spacer_w, 1],
+        height_ratios=height_ratios,
     )
     ax_line = fig.add_subplot(outer[1])
 
-    # ── Spatial mask ─────────────────────────────────────────────────────────
+    # Map data row index → gridspec row index (rows at or after the gap shift by 1)
+    def _grows(data_row):
+        return data_row if data_row < LAG5_SECTION_START else data_row + 1
+
+    # ── Spatial mask ──────────────────────────────────────────────────────────
     mask_path  = os.path.join(REPO_DIR, 'data/real/output/spatial_mask.npy')
     valid_mask = (np.load(mask_path) > 0) if os.path.exists(mask_path) \
                  else np.ones((50, 50), dtype=bool)
 
-    # ── Pre-compute all cell positions BEFORE drawing anything ───────────────
-    # This avoids the problem of fig.add_subplot() later replacing axes
-    # that already have content.
+    # ── Pre-compute cell positions using mapped gridspec rows ─────────────────
     cell_bboxes = {}
     for r in range(n_rows):
         for c in range(n_cols):
-            cell_bboxes[(r, c)] = _cell_pos(fig, grid_top, r, _gcol(c))
+            cell_bboxes[(r, c)] = _cell_pos(fig, grid_top, _grows(r), _gcol(c))
 
-    # ── Header geometry ──────────────────────────────────────────────────────
-    # top=0.87 puts the grid ceiling at ~0.87; the band 0.87→0.96 is header space.
-    # Compute all positions here (needs cell_bboxes); draw section items LATER
-    # (after all image axes) so they land on top in the rendering stack.
-    outer_top    = outer[0].get_position(fig).y1   # ≈ 0.87
-    top_row_top  = cell_bboxes[(0, 0)].y1           # ≈ 0.87
-    fig_hdr_top  = 0.96                             # below suptitle
-    hdr_space    = fig_hdr_top - top_row_top        # ≈ 0.09
+    # Also get the bbox of the gap row itself (for placing lag-5 column headers)
+    gap_bboxes = {}
+    for c in range(n_cols):
+        gap_bboxes[c] = _cell_pos(fig, grid_top, gap_gs_row, _gcol(c))
 
-    col_hdr_y = top_row_top + hdr_space * 0.28     # column header row
-    sec_hdr_y = top_row_top + hdr_space * 0.78     # section header row (upper)
-    rule_y    = top_row_top + hdr_space * 0.53     # horizontal rule between them
+    # ── Header geometry ───────────────────────────────────────────────────────
+    top_row_top = cell_bboxes[(0, 0)].y1
+    fig_hdr_top = 0.96
+    hdr_space   = fig_hdr_top - top_row_top
+
+    col_hdr_y = top_row_top + hdr_space * 0.28
+    sec_hdr_y = top_row_top + hdr_space * 0.78
+    rule_y    = top_row_top + hdr_space * 0.53
 
     inputs_x0 = cell_bboxes[(0, 0)].x0
     inputs_x1 = cell_bboxes[(0, 4)].x1
-    output_x0 = cell_bboxes[(0, 5)].x0   # "Output" = predicted (col 5 only)
+    output_x0 = cell_bboxes[(0, 5)].x0
     output_x1 = cell_bboxes[(0, 5)].x1
-    target_x0 = cell_bboxes[(0, 6)].x0   # "Target"  = true recruit (col 6 only)
+    target_x0 = cell_bboxes[(0, 6)].x0
     target_x1 = cell_bboxes[(0, 6)].x1
-    inputs_cx = (inputs_x0 + inputs_x1) / 2
-    output_cx = (output_x0 + output_x1) / 2
-    target_cx = (target_x0 + target_x1) / 2
-    div_x     = (cell_bboxes[(0, 4)].x1 + cell_bboxes[(0, 5)].x0) / 2  # inputs|output
-    div2_x    = (cell_bboxes[(0, 5)].x1 + cell_bboxes[(0, 6)].x0) / 2  # output|target
-    grid_bot  = cell_bboxes[(n_rows - 1, 0)].y0
+    inputs_cx  = (inputs_x0 + inputs_x1) / 2
+    output_cx  = (output_x0 + output_x1) / 2
+    target_cx  = (target_x0 + target_x1) / 2
+    div_x      = (cell_bboxes[(0, 4)].x1 + cell_bboxes[(0, 5)].x0) / 2
+    div2_x     = (cell_bboxes[(0, 5)].x1 + cell_bboxes[(0, 6)].x0) / 2
+    grid_bot   = cell_bboxes[(n_rows - 1, 0)].y0
 
-    # Column headers — drawn now (before images); fine since they're in the
-    # clear header band above top_row_top
-    for col, ttl in enumerate(COL_TITLES):
+    # ── Column headers — lag-0 section (top) ─────────────────────────────────
+    for col, ttl in enumerate(COL_TITLES_LAG0):
         bbox = cell_bboxes[(0, col)]
         fig.text(
             bbox.x0 + bbox.width / 2, col_hdr_y, ttl,
@@ -490,9 +520,21 @@ def make_figure(runs=None, save_path=None, display_year=None,
             transform=fig.transFigure,
         )
 
-    # ── Per-run processing ───────────────────────────────────────────────────
-    line_data = {}    # row_idx → yearly-aggregate dict
-    row_meta  = []    # (label, color, t_yr, v_yr, te_yr)
+    # ── Column headers — lag-5 section ───────────────────────────────────────
+    # Centred vertically inside the gap row
+    for col, ttl in enumerate(COL_TITLES_LAG5):
+        bbox = gap_bboxes[col]
+        gap_cy = bbox.y0 + bbox.height / 2
+        fig.text(
+            bbox.x0 + bbox.width / 2, gap_cy, ttl,
+            ha='center', va='center',
+            fontsize=FS_COL_HDR, fontweight='bold',
+            transform=fig.transFigure,
+        )
+
+    # ── Per-run processing ────────────────────────────────────────────────────
+    line_data = {}
+    row_meta  = []
 
     for row_idx, run_spec in enumerate(runs):
         model_size, level, channel_cfg, pred_mode, criterion = run_spec
@@ -503,59 +545,116 @@ def make_figure(runs=None, save_path=None, display_year=None,
         )
         print(f'\n[{row_idx+1}/{n_rows}]  {label}')
 
-        # Row label (figure text to the left of the row)
+        # Row label on left margin — wrap on ' | ' so each component is its own line
         bbox0  = cell_bboxes[(row_idx, 0)]
         row_cy = bbox0.y0 + bbox0.height / 2
+        label_wrapped = label.replace(' | ', '\n')
         fig.text(
-            left_margin - 0.01, row_cy, label,
+            left_margin - 0.01, row_cy, label_wrapped,
             ha='right', va='center', fontsize=FS_ROW_LABEL,
             transform=fig.transFigure, color=color, fontweight='bold',
-            rotation=0, wrap=True,
+            linespacing=1.3,
         )
 
-        # ── Load run ────────────────────────────────────────────────────────
+        # ── BASELINE ROW ──────────────────────────────────────────────────────
+        if model_size == 'BASELINE':
+            lag = 5 if pred_mode == 'lag5' else 0
+
+            for c in range(5):
+                _blank_ax(fig, cell_bboxes[(row_idx, c)], '')
+
+            baseline_grid = _load_baseline_grid(lag)
+            obs_mean_grid = _load_baseline_obs_mean(lag)
+
+            if baseline_grid is not None:
+                # Col 5 — single-year observed target matching display_year
+                obs_single = _get_baseline_obs_single(lag, target_year_idx, valid_mask)
+
+                if obs_single is not None:
+                    rec_vmin = float(obs_single[valid_mask].min())
+                    rec_vmax = float(obs_single[valid_mask].max())
+                    draw_single_ax(fig, cell_bboxes[(row_idx, 5)],
+                                   obs_single, CMAPS['recruit'],
+                                   rec_vmin, rec_vmax, color, valid_mask)
+                elif obs_mean_grid is not None:
+                    rec_vmin = float(np.log1p(np.maximum(0, obs_mean_grid[valid_mask])).min())
+                    rec_vmax = float(np.log1p(obs_mean_grid[valid_mask]).max())
+                    draw_single_ax(fig, cell_bboxes[(row_idx, 5)],
+                                   np.log1p(np.maximum(0, obs_mean_grid)),
+                                   CMAPS['recruit'], rec_vmin, rec_vmax,
+                                   color, valid_mask)
+                else:
+                    _blank_ax(fig, cell_bboxes[(row_idx, 5)], 'obs target')
+
+                # Col 6 — baseline mean grid (log1p for display)
+                pred_log = np.log1p(np.maximum(0, baseline_grid))
+                rec_vmin = float(pred_log[valid_mask].min())
+                rec_vmax = float(pred_log[valid_mask].max())
+                draw_single_ax(fig, cell_bboxes[(row_idx, 6)],
+                               pred_log, CMAPS['recruit'],
+                               rec_vmin, rec_vmax, color, valid_mask)
+
+                # Line data — flat predicted total across full year range
+                pred_total = float(baseline_grid[valid_mask].sum())
+                all_year_idxs = []
+                for other_idx, other_agg in line_data.items():
+                    if runs[other_idx][0] != 'BASELINE':
+                        other_lag = row_meta[other_idx][5] if other_idx < len(row_meta) else 0
+                        if other_lag == lag:
+                            all_year_idxs = sorted(other_agg.keys())
+                            break
+                if not all_year_idxs:
+                    n_years_total = (21 + 6 + 4) if lag == 5 else (24 + 8 + 4)
+                    all_year_idxs = list(range(n_years_total))
+
+                line_data[row_idx] = {
+                    yi: {'pred': [pred_total], 'obs': [0.0]}
+                    for yi in all_year_idxs
+                }
+            else:
+                _blank_ax(fig, cell_bboxes[(row_idx, 5)], 'run baseline_evaluation.py')
+                _blank_ax(fig, cell_bboxes[(row_idx, 6)], 'run baseline_evaluation.py')
+
+            t_yr  = 21 if lag == 5 else 24
+            v_yr  = 6  if lag == 5 else 8
+            te_yr = 4
+            row_meta.append((label, color, t_yr, v_yr, te_yr, lag))
+            continue
+        # ── END BASELINE ROW ──────────────────────────────────────────────────
+
+        # ── MODEL ROW ─────────────────────────────────────────────────────────
         try:
             (model, meta, bias, t_yr, v_yr, te_yr,
              tr_ld, va_ld, te_ld) = load_run(*run_spec)
         except Exception as exc:
-            print(f'  ❌  Load failed: {exc}')
+            print(f'  Load failed: {exc}')
             for c in range(n_cols):
                 _blank_ax(fig, cell_bboxes[(row_idx, c)], 'LOAD ERR')
             row_meta.append((label, color, 24, 8, 4, 0))
             continue
 
-        data_type = 'real' if level == 'real' else 'dummy'
         row_meta.append((label, color, t_yr, v_yr, te_yr, meta.get('lag', 0)))
 
-        # ── Spatial sample ──────────────────────────────────────────────────
-        # For lag>0 models the dataset year_idx is the *input* year, which is
-        # lag years earlier than the displayed calendar year.
-        run_lag = meta.get('lag', 0)
+        run_lag      = meta.get('lag', 0)
         eff_year_idx = (target_year_idx - run_lag
                         if target_year_idx is not None else None)
-        print('  Finding representative test sample …')
+        print('  Finding representative test sample ...')
         inp_np, tgt_log, pred_log = get_test_sample(
             te_ld, model, bias, valid_mask,
             target_year_idx=eff_year_idx,
         )
 
         if inp_np is None:
-            print('  ⚠  No valid test sample found; drawing blanks.')
+            print('  No valid test sample found; drawing blanks.')
             for c in range(n_cols):
                 _blank_ax(fig, cell_bboxes[(row_idx, c)], 'NO DATA')
         else:
             ch = extract_channels(inp_np, meta)
 
-            # ── Colour scales ────────────────────────────────────────────────
             def arr_of(lst, single=None):
                 items = list(lst or []) + ([single] if single is not None else [])
                 items = [x for x in items if x is not None]
                 return np.stack(items) if items else None
-
-            sp_arr  = arr_of(ch['sp_hist'],   ch['sp_curr'])
-            rh_arr  = arr_of(ch['rec_hist'])
-            tmp_arr = arr_of(ch['temp_hist'],  ch['temp_curr'])
-            rec_arr = arr_of([tgt_log, pred_log])
 
             def safe_range(arr, symmetric=False):
                 if arr is None:
@@ -566,90 +665,98 @@ def make_figure(runs=None, save_path=None, display_year=None,
                     return (-ab, ab)
                 return (lo, hi)
 
+            sp_arr  = arr_of(ch['sp_hist'],  ch['sp_curr'])
+            rh_arr  = arr_of(ch['rec_hist'])
+            tmp_arr = arr_of(ch['temp_hist'], ch['temp_curr'])
+            rec_arr = arr_of([tgt_log, pred_log])
+
             sp_vmin,  sp_vmax  = safe_range(sp_arr)
             rh_vmin,  rh_vmax  = safe_range(rh_arr)
             tmp_vmin, tmp_vmax = safe_range(tmp_arr, symmetric=True)
             rec_vmin, rec_vmax = safe_range(rec_arr)
 
-            # ── Draw 7 columns ───────────────────────────────────────────────
-
-            # Col 0 — spawner history (stack)
+            # Col 0 — spawner history
             if ch['sp_hist']:
                 draw_stack_ax(fig, cell_bboxes[(row_idx, 0)],
                               ch['sp_hist'], CMAPS['spawner'],
                               sp_vmin, sp_vmax, color, valid_mask)
             else:
-                _blank_ax(fig, cell_bboxes[(row_idx, 0)], 'not used in this model')
+                _blank_ax(fig, cell_bboxes[(row_idx, 0)], 'not used')
 
             # Col 1 — spawner current
             if ch['sp_curr'] is not None:
                 draw_single_ax(fig, cell_bboxes[(row_idx, 1)],
                                ch['sp_curr'], CMAPS['spawner'],
                                sp_vmin, sp_vmax, color, valid_mask)
-            elif pred_mode in ('normal',):
-                # Now-cast models: current spawner absent means not used
-                _blank_ax(fig, cell_bboxes[(row_idx, 1)], 'not used in this model')
+            elif pred_mode == 'normal':
+                _blank_ax(fig, cell_bboxes[(row_idx, 1)], 'not used')
             else:
-                # Forecast modes: current spawner excluded by prediction mode
-                _blank_ax(fig, cell_bboxes[(row_idx, 1)], 'not included in\nthis model mode')
+                _blank_ax(fig, cell_bboxes[(row_idx, 1)], 'excluded\n(forecast mode)')
 
-            # Col 2 — temp history (stack)
+            # Col 2 — temp history
             if ch['temp_hist']:
                 draw_stack_ax(fig, cell_bboxes[(row_idx, 2)],
                               ch['temp_hist'], CMAPS['temp'],
                               tmp_vmin, tmp_vmax, color, valid_mask)
             else:
-                _blank_ax(fig, cell_bboxes[(row_idx, 2)], 'not used in this model')
+                _blank_ax(fig, cell_bboxes[(row_idx, 2)], 'not used')
 
             # Col 3 — temp current
             if ch['temp_curr'] is not None:
                 draw_single_ax(fig, cell_bboxes[(row_idx, 3)],
                                ch['temp_curr'], CMAPS['temp'],
                                tmp_vmin, tmp_vmax, color, valid_mask)
-            elif pred_mode in ('one_year_ahead',):
-                _blank_ax(fig, cell_bboxes[(row_idx, 3)], 'not included in\nthis model mode')
+            elif pred_mode == 'one_year_ahead':
+                _blank_ax(fig, cell_bboxes[(row_idx, 3)], 'excluded\n(forecast mode)')
             else:
-                _blank_ax(fig, cell_bboxes[(row_idx, 3)], 'not used in this model')
+                _blank_ax(fig, cell_bboxes[(row_idx, 3)], 'not used')
 
-            # Col 4 — recruit history (stack)
+            # Col 4 — recruit history
             if ch['rec_hist']:
                 draw_stack_ax(fig, cell_bboxes[(row_idx, 4)],
                               ch['rec_hist'], CMAPS['recruit'],
                               rh_vmin, rh_vmax, color, valid_mask)
             else:
-                _blank_ax(fig, cell_bboxes[(row_idx, 4)], 'not used in this model')
+                _blank_ax(fig, cell_bboxes[(row_idx, 4)], 'not used')
 
-            # Col 5 — true recruit (observed target)
+            # Col 5 — observed target
             draw_single_ax(fig, cell_bboxes[(row_idx, 5)],
                            tgt_log, CMAPS['recruit'],
                            rec_vmin, rec_vmax, color, valid_mask)
 
-            # Col 6 — predicted recruit (model output)
+            # Col 6 — predicted
             draw_single_ax(fig, cell_bboxes[(row_idx, 6)],
                            pred_log, CMAPS['recruit'],
                            rec_vmin, rec_vmax, color, valid_mask)
 
-        # ── Yearly aggregates ────────────────────────────────────────────────
-        print('  Collecting yearly aggregates …')
+        print('  Collecting yearly aggregates ...')
         agg = collect_yearly_aggregates(
             [tr_ld, va_ld, te_ld], model, bias, valid_mask
         )
         line_data[row_idx] = agg
 
-    # ── Section headers + dividers — drawn AFTER all image axes so they sit
-    #    on top in the render stack.  White bbox keeps text readable.
+    # ── Section divider — drawn as top border of the gap row ─────────────────
+    if LAG5_SECTION_START < n_rows:
+        divider_y = gap_bboxes[0].y1   # top edge of the gap row
+
+        fig.add_artist(Line2D(
+            [inputs_x0, target_x1], [divider_y, divider_y],
+            transform=fig.transFigure,
+            color='#333333', lw=2.0, ls='-',
+        ))
+        
+
+    # ── Section headers + vertical dividers ───────────────────────────────────
     _wbg = dict(facecolor='white', edgecolor='none', alpha=0.90, pad=2)
 
-    # Section header text — font size controlled by FS_SECTION_HDR above
-    for cx, label in [(inputs_cx, 'Inputs'),
-                      (output_cx, 'Target'),
-                      (target_cx, 'Output')]:
-        fig.text(cx, sec_hdr_y, label,
+    for cx, lbl in [(inputs_cx, 'Inputs'),
+                    (output_cx, 'Target'),
+                    (target_cx, 'Output')]:
+        fig.text(cx, sec_hdr_y, lbl,
                  ha='center', va='center', fontsize=FS_SECTION_HDR,
                  fontweight='bold', transform=fig.transFigure,
                  color='#111111', bbox=_wbg)
 
-    # Horizontal rules under each section header
     for x0, x1 in [(inputs_x0, inputs_x1),
                    (output_x0, output_x1),
                    (target_x0, target_x1)]:
@@ -657,40 +764,40 @@ def make_figure(runs=None, save_path=None, display_year=None,
                               transform=fig.transFigure,
                               color='#aaaaaa', lw=1.0))
 
-    # Vertical dividers: inputs|output and output|target
     for dx in [div_x, div2_x]:
         fig.add_artist(Line2D([dx, dx], [grid_bot, fig_hdr_top],
                               transform=fig.transFigure,
                               color='#666666', lw=1.5, ls='--'))
 
-    # ── Line plot ─────────────────────────────────────────────────────────────
-    print('\nBuilding line plot …')
-    obs_plotted = False   # draw observed (black dashed) only once
+    # ── Line plot ──────────────────────────────────────────────────────────────
+    print('\nBuilding line plot ...')
+    obs_plotted = False
     for row_idx, (label, color, t_yr, v_yr, te_yr, lag) in enumerate(row_meta):
         if row_idx not in line_data:
             continue
         agg          = line_data[row_idx]
         years_sorted = sorted(agg.keys())
-        # Shift by lag so lag>0 models align with their *predicted* year,
-        # then add DATA_START_YEAR to convert year_idx → calendar year.
         years_plot   = [y + lag + DATA_START_YEAR for y in years_sorted]
-        pred_med = [np.median(agg[y]['pred']) for y in years_sorted]
-        obs_med  = [np.median(agg[y]['obs'])  for y in years_sorted]
-        pred_p25 = [np.percentile(agg[y]['pred'], 25) for y in years_sorted]
-        pred_p75 = [np.percentile(agg[y]['pred'], 75) for y in years_sorted]
+        pred_med     = [np.median(agg[y]['pred']) for y in years_sorted]
+        obs_med      = [np.median(agg[y]['obs'])  for y in years_sorted]
 
-        ax_line.fill_between(years_plot, pred_p25, pred_p75,
-                             color=color, alpha=0.15)
-        ax_line.plot(years_plot, pred_med, '-',  color=color, lw=2.0,
-                     label=f'Pred — {label}')
-        # Observed: single black dashed line drawn once (first lag-0 run)
-        if lag == 0 and not obs_plotted:
+        is_baseline = (runs[row_idx][0] == 'BASELINE')
+
+        if not is_baseline:
+            pred_p25 = [np.percentile(agg[y]['pred'], 25) for y in years_sorted]
+            pred_p75 = [np.percentile(agg[y]['pred'], 75) for y in years_sorted]
+            ax_line.fill_between(years_plot, pred_p25, pred_p75,
+                                 color=color, alpha=0.15)
+
+        ax_line.plot(years_plot, pred_med, '-', color=color, lw=2.0,
+                     label=f'{"Baseline" if is_baseline else "Pred"} — {label}')
+
+        if not is_baseline and lag == 0 and not obs_plotted:
             ax_line.scatter(years_plot, obs_med, color='black', s=18, zorder=5,
                             alpha=0.85, label='Observed')
             obs_plotted = True
 
-    # Phase shading — use first run's splits (lag0 reference)
-    # all_years holds raw year_idx values; convert to calendar years for plotting.
+    # Phase shading
     if row_meta and line_data:
         _, _, t_yr, v_yr, te_yr, _ = row_meta[0]
         all_years = sorted({y for d in line_data.values() for y in d})
@@ -705,32 +812,36 @@ def make_figure(runs=None, save_path=None, display_year=None,
             ax_line.axvspan(val_end_cal,   y1_cal,        color='crimson',    alpha=0.07)
             ax_line.axvline(train_end_cal, color='grey', lw=1.0, ls=':')
             ax_line.axvline(val_end_cal,   color='grey', lw=1.0, ls=':')
-            ax_line.text((y0_cal + train_end_cal) / 2,    0.93, 'TRAIN', transform=xform,
-                         ha='center', fontsize=FS_PHASE_LABEL, color='seagreen',   fontweight='bold')
-            ax_line.text((train_end_cal + val_end_cal) / 2, 0.93, 'VALIDATION', transform=xform,
-                         ha='center', fontsize=FS_PHASE_LABEL, color='darkorange', fontweight='bold')
-            ax_line.text((val_end_cal + y1_cal) / 2,      0.93, 'TEST',  transform=xform,
-                         ha='center', fontsize=FS_PHASE_LABEL, color='crimson',    fontweight='bold')
+            ax_line.text((y0_cal + train_end_cal) / 2,      0.93, 'TRAIN',
+                         transform=xform, ha='center', fontsize=FS_PHASE_LABEL,
+                         color='seagreen', fontweight='bold')
+            ax_line.text((train_end_cal + val_end_cal) / 2,  0.93, 'VALIDATION',
+                         transform=xform, ha='center', fontsize=FS_PHASE_LABEL,
+                         color='darkorange', fontweight='bold')
+            ax_line.text((val_end_cal + y1_cal) / 2,         0.93, 'TEST',
+                         transform=xform, ha='center', fontsize=FS_PHASE_LABEL,
+                         color='crimson', fontweight='bold')
 
+    # Legend — solid colour patches only, no dashed line entry
+    # Strip newlines from labels so they appear on a single line in the legend
     legend_handles = [
-        mpatches.Patch(color=color, label=label[:55])
+        mpatches.Patch(color=color, label=label.replace('\n', ' ').strip()[:70])
         for label, color, *_ in row_meta
-    ] + [
-        plt.Line2D([0], [0], color='k', lw=2.0, ls='-', label='Predicted (solid)'),
     ]
     if obs_plotted:
         legend_handles.append(
-            plt.Line2D([0], [0], color='black', lw=1.5, ls='--', label='Observed (dashed)')
+            plt.Line2D([0], [0], color='black', marker='o', ms=4,
+                       lw=0, label='Observed')
         )
     ax_line.legend(handles=legend_handles, fontsize=FS_LEGEND,
                    loc='upper center', bbox_to_anchor=(0.5, -0.18),
                    framealpha=0.85, ncol=2, borderaxespad=0.)
+
     ax_line.set_xlabel('Year', fontsize=FS_AXIS_LABEL)
     ax_line.set_ylabel('Total recruit abundance (density)', fontsize=FS_AXIS_LABEL)
     ax_line.set_title(
-        'Aggregate yearly recruits',
-        fontsize=FS_AXIS_TITLE,
-        fontweight='bold',
+        'Median Across Bootstrap Aggregate Yearly Recruits',
+        fontsize=FS_AXIS_TITLE, fontweight='bold',
     )
     ax_line.grid(True, alpha=0.25)
 
@@ -739,7 +850,7 @@ def make_figure(runs=None, save_path=None, display_year=None,
     out = save_path or os.path.join(SAVE_DIR, 'top_model_figure.png')
     plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f'\n✅  Saved → {out}')
+    print(f'\nSaved -> {out}')
     return out
 
 
