@@ -49,7 +49,7 @@ N_BOOTSTRAPS  <- 1
 N_SUBSAMPLE   <- 300   # out of ~349 stations
 SEED          <- 2026
 getwd()
-setwd("C:/Users/nmorok/Documents/Thesis/Teleconnections_ViT/data/real/output")
+setwd("C:/Users/nmorok/Documents/Thesis/Teleconnections-ViT/data/real/output")
 OUTPUT_DIR    <- "C:/Users/nmorok/Documents/Thesis/Teleconnections-ViT/data/real/output"
 
 dir.create(OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)
@@ -230,6 +230,185 @@ fit_spde_year <- function(y, station_coords, mesh, spde, A_grid) {
   return(pred)
 }
 
+####
+# Tweedie
+
+
+fit_spde_year_tweedie <- function(y, station_coords, mesh, spde, A_grid) {
+  #' Fit spatial Tweedie INLA model and predict at grid centroids.
+  #' Data is scaled internally by SCALE_FACTOR to avoid TWEEDIE_MAX_IDX overflow.
+  #' Predictions are back-multiplied before returning, so output is on original scale.
+  
+  SCALE_FACTOR <- 1000  # divide before fitting, multiply after
+  y_scaled <- y / SCALE_FACTOR
+  
+  A_obs <- inla.spde.make.A(mesh, loc = station_coords)
+  
+  stack_obs <- inla.stack(
+    data    = list(y = y_scaled),
+    A       = list(A_obs, 1),
+    effects = list(spatial   = 1:spde$n.spde,
+                   intercept = rep(1, length(y_scaled))),
+    tag = "obs"
+  )
+  
+  stack_pred <- inla.stack(
+    data    = list(y = NA),
+    A       = list(A_grid, 1),
+    effects = list(spatial   = 1:spde$n.spde,
+                   intercept = rep(1, nrow(A_grid))),
+    tag = "pred"
+  )
+  
+  stack_full <- inla.stack(stack_obs, stack_pred)
+  
+  result <- tryCatch({
+    inla(
+      y ~ -1 + intercept + f(spatial, model = spde),
+      family = "tweedie",
+      data   = inla.stack.data(stack_full),
+      control.family = list(
+        link = "log",
+        hyper = list(
+          theta1 = list(prior = "normal", param = c(0, 10))
+        )
+      ),
+      control.predictor = list(
+        A       = inla.stack.A(stack_full),
+        compute = TRUE,
+        link    = 1   # back-transforms to response scale (scaled units)
+      ),
+      control.compute = list(config = FALSE),
+      control.inla    = list(strategy = "gaussian", int.strategy = "eb"),
+      verbose = FALSE
+    )
+  }, error = function(e) {
+    warning(sprintf("INLA Tweedie failed: %s", e$message))
+    return(NULL)
+  })
+  
+  if (is.null(result)) return(rep(0, nrow(A_grid)))
+  
+  cat(sprintf("    Tweedie p = %.3f, dispersion = %.4f\n",
+              result$summary.hyperpar["p parameter for Tweedie", "mean"],
+              result$summary.hyperpar["Dispersion parameter for Tweedie", "mean"]))
+  
+  idx_pred <- inla.stack.index(stack_full, tag = "pred")$data
+  pred_scaled <- result$summary.fitted.values[idx_pred, "mean"]
+  
+  # Back-multiply to original scale
+  pred <- pred_scaled * SCALE_FACTOR
+  pred[pred < 0] <- 0
+  pred[is.na(pred)] <- 0
+  
+  return(pred)
+}
+
+library(parallel)
+
+run_bootstrap_parallel <- function(data_sf, station_locations_sf, grid_info, spde_comps,
+                                   n_bootstraps = N_BOOTSTRAPS, n_subsample = N_SUBSAMPLE,
+                                   seed = SEED, n_cores = 12) {
+  
+  years        <- sort(unique(data_sf$year))
+  n_years      <- length(years)
+  all_stations <- unique(data_sf$station)
+  n_stations   <- length(all_stations)
+  stn_coords_all <- st_coordinates(station_locations_sf)
+  stn_names_all  <- station_locations_sf$station
+  
+  cat(sprintf("\n  Parallel bootstrap: %d stations, %d years, %d bootstraps on %d cores\n",
+              n_stations, n_years, n_bootstraps, n_cores))
+  
+  # Pre-generate all bootstrap station subsets so seeds are reproducible
+  set.seed(seed)
+  bootstrap_stations <- lapply(1:n_bootstraps, function(b) {
+    sub_idx <- sample(1:n_stations, min(n_subsample, n_stations), replace = FALSE)
+    all_stations[sub_idx]
+  })
+  
+  # Worker function: runs all years for a single bootstrap index
+  run_one_bootstrap <- function(b) {
+    library(INLA)
+    library(dplyr)
+    library(sf)
+    
+    log_file <- file.path(
+      "C:/Users/nmorok/Documents/Thesis/Teleconnections-ViT/data/real/output",
+      sprintf("worker_%02d.log", b)
+    )
+    
+    sub_stations <- bootstrap_stations[[b]]
+    result_array <- array(0, dim = c(n_years, PAD_NY, PAD_NX))
+    
+    for (y_idx in 1:n_years) {
+      yr      <- years[y_idx]
+      yr_data <- data_sf %>% filter(year == yr, station %in% sub_stations)
+      
+      if (nrow(yr_data) == 0) {
+        cat(sprintf("Bootstrap %d, year %d SKIPPED (no data)\n", b, yr),
+            file = log_file, append = TRUE)
+        next
+      }
+      
+      avail_stations <- yr_data$station
+      avail_coords   <- stn_coords_all[
+        match(avail_stations, stn_names_all), , drop = FALSE
+      ]
+      
+      pred_valid <- tryCatch({
+        fit_spde_year_tweedie(
+          y              = yr_data$avg_dens,
+          station_coords = avail_coords,
+          mesh           = spde_comps$mesh,
+          spde           = spde_comps$spde,
+          A_grid         = spde_comps$A_grid
+        )
+      }, error = function(e) {
+        cat(sprintf("Bootstrap %d, year %d FAILED: %s\n", b, yr, e$message),
+            file = log_file, append = TRUE)
+        rep(0, nrow(spde_comps$A_grid))
+      })
+      
+      cat(sprintf("Bootstrap %d, year %d done\n", b, yr),
+          file = log_file, append = TRUE)
+      
+      result_array[y_idx, , ] <- fill_matrix(pred_valid, grid_info)
+    }
+    
+    return(result_array)
+  }
+  
+  # Run in parallel
+  cat("  Launching workers...\n")
+  start_time <- Sys.time()
+  
+  cl <- makeCluster(n_cores)
+  
+  # Export everything each worker needs
+  clusterExport(cl, varlist = c(
+    "bootstrap_stations", "data_sf", "station_locations_sf",
+    "stn_coords_all", "stn_names_all", "all_stations",
+    "years", "n_years", "n_subsample",
+    "grid_info", "spde_comps",
+    "fit_spde_year_tweedie", "fill_matrix",
+    "PAD_NY", "PAD_NX"
+  ), envir = environment())
+  
+  results_list <- parLapply(cl, 1:n_bootstraps, run_one_bootstrap)
+  stopCluster(cl)
+  
+  elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+  cat(sprintf("  Done! %d bootstraps in %.1f min\n", n_bootstraps, elapsed))
+  
+  # Reassemble: list of [n_years,50,50] → array [n_bootstraps, n_years, 50, 50]
+  output <- array(0, dim = c(n_bootstraps, n_years, PAD_NY, PAD_NX))
+  for (b in 1:n_bootstraps) {
+    output[b, , , ] <- results_list[[b]]
+  }
+  
+  return(list(data = output, years = years))
+}
 
 # ==============================================================================
 # STEP 4: BOOTSTRAP LOOP
@@ -278,7 +457,7 @@ run_bootstrap <- function(data_sf, station_locations_sf, grid_info, spde_comps,
       avail_coords <- stn_coords_all[match(avail_stations, stn_names_all), , drop = FALSE]
       
       # Fit SPDE → vector of length n_valid
-      pred_valid <- fit_spde_year(
+      pred_valid <- fit_spde_year_tweedie(
         y = yr_data$avg_dens,
         station_coords = avail_coords,
         mesh = spde_comps$mesh,
@@ -503,7 +682,7 @@ run_gridding <- function(spawner_sf, recruit_sf, station_locations_sf,
   test_data <- spawner_sf %>% filter(year == test_yr)
   test_coords <- stn_coords[match(test_data$station, station_locations_sf$station), , drop = FALSE]
   
-  test_pred <- fit_spde_year(test_data$avg_dens, test_coords,
+  test_pred <- fit_spde_year_tweedie(test_data$avg_dens, test_coords,
                              spde_comps$mesh, spde_comps$spde, spde_comps$A_grid)
   cat(sprintf("  Year %d: range [%.0f, %.0f], nonzero: %d/%d\n",
               test_yr, min(test_pred), max(test_pred),
@@ -517,16 +696,28 @@ run_gridding <- function(spawner_sf, recruit_sf, station_locations_sf,
   
   # ── Step 3: Grid spawners ──
   cat("\n[3/5] Gridding spawners...\n")
-  spawner_result <- run_bootstrap(
-    spawner_sf, station_locations_sf, grid_info, spde_comps,
-    n_bootstraps = n_bootstraps, n_subsample = n_subsample, seed = SEED
-  )
+  #spawner_result <- run_bootstrap(
+  #  spawner_sf, station_locations_sf, grid_info, spde_comps,
+  #  n_bootstraps = n_bootstraps, n_subsample = n_subsample, seed = SEED
+  #)
   
   # ── Step 4: Grid recruits ──
+  #cat("\n[4/5] Gridding recruits...\n")
+  #recruit_result <- run_bootstrap(
+  #  recruit_sf, station_locations_sf, grid_info, spde_comps,
+  #  n_bootstraps = n_bootstraps, n_subsample = n_subsample, seed = SEED + 1000
+  #)
+  
+  spawner_result <- run_bootstrap_parallel(
+    spawner_sf, station_locations_sf, grid_info, spde_comps,
+    n_bootstraps = n_bootstraps, n_subsample = n_subsample,
+    seed = SEED, n_cores = 12
+  )
   cat("\n[4/5] Gridding recruits...\n")
-  recruit_result <- run_bootstrap(
+  recruit_result <- run_bootstrap_parallel(
     recruit_sf, station_locations_sf, grid_info, spde_comps,
-    n_bootstraps = n_bootstraps, n_subsample = n_subsample, seed = SEED + 1000
+    n_bootstraps = n_bootstraps, n_subsample = n_subsample,
+    seed = SEED + 1000, n_cores = 12
   )
   
   # ── Step 5: Save ──
@@ -562,7 +753,7 @@ station_locations_sf_named <- station_locations_sf %>%
 test <- run_gridding(
   spawner_sf, recruit_sf, station_locations_sf_named,
  survey_domain, sf_maps,
- n_bootstraps = 100, n_subsample = 300
+ n_bootstraps = 12, n_subsample = 300
 )
 
 test2 <- test
