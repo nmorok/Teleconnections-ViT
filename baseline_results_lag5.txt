@@ -3,11 +3,11 @@ Train / Val / Test: 21 / 6 / 4 years
 Per-bootstrap mean grids; metrics in count space
 Valid spatial cells: 886 / 2500
 
-Overall MAE: 454.6
-Overall Spearman: 0.8119
+Overall MAE: 453.6
+Overall Spearman: 0.8105
 
 Year          MAE   MAE SD   Spearman   Spear SD      n
 --------------------------------------------------------
-2021        605.0     32.4     0.8108     0.0132    100
-2022        483.9     54.4     0.7938     0.0088    100
-2023        275.0     32.8     0.8312     0.0085    100
+2021        611.3     31.9     0.8079     0.0147    100
+2022        482.2     46.0     0.7922     0.0089    100
+2023        267.2     30.1     0.8315     0.0071    100
